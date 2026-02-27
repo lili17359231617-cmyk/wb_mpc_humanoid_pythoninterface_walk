@@ -1,8 +1,0 @@
-void cppad_cg_models(char const *const** names,
-                     int* count) {
-   static const char* const models[] = {
-      "foot_r_contact_position"};
-   *names = models;
-   *count = 1;
-}
-
