@@ -17,6 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     x11-apps \
     mesa-utils \
     gettext-base \
+    xvfb \
+    python3-pip \
+    python3-setuptools \
     && rm -rf /var/lib/apt/lists/*
 
 COPY dependencies.txt /tmp/dependencies.txt
@@ -28,9 +31,18 @@ RUN apt-get update && \
 # Set default shell to bash
 SHELL ["/bin/bash", "-c"]
 
+# Install Python dependencies
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt && \
+    rm -f /tmp/requirements.txt
+
 # Set up environment variables
 ENV CMAKE_PREFIX_PATH="/opt/ros/${ROS_DISTRO}:${CMAKE_PREFIX_PATH}"
 ENV DISPLAY=${DISPLAY} QT_X11_NO_MITSHM=1
+# Set up library paths for hpipm and blasfeo (will be set at runtime if install directory exists)
+ENV LD_LIBRARY_PATH="/wb_humanoid_mpc_ws/install/hpipm_catkin/lib:/wb_humanoid_mpc_ws/install/blasfeo_catkin/lib:${LD_LIBRARY_PATH}"
+# Set up Python path for humanoid_wb_mpc_py module
+ENV PYTHONPATH="/wb_humanoid_mpc_ws/install/humanoid_wb_mpc/lib/python3.12/site-packages:${PYTHONPATH}"
 
 # Set up user and workspace
 WORKDIR ${WB_HUMANOID_MPC_DIR}

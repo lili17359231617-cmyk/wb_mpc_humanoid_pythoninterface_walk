@@ -1,0 +1,7 @@
+# Python dependencies for Whole Body MPC project
+# Core dependencies (required)
+numpy>=1.20.0
+scipy>=1.7.0
+
+# Optional dependencies (uncomment if needed)
+# pynput>=1.7.0  # For interactive keyboard control in test_mpc_mrt_walk.py

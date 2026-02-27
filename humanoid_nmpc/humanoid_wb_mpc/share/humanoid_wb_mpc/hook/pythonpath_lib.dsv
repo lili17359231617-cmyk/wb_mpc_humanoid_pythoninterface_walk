@@ -1,0 +1,1 @@
+prepend-non-duplicate;PYTHONPATH;$COLCON_CURRENT_PREFIX/lib

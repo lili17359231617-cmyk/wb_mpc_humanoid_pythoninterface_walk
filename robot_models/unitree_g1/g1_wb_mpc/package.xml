@@ -22,6 +22,7 @@
   <depend>pinocchio</depend>
   <depend>humanoid_common_mpc</depend>
   <depend>humanoid_wb_mpc_ros2</depend>
+  <depend>g1_description</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_clang_format</test_depend>

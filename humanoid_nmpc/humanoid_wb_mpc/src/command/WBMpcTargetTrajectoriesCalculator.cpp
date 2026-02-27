@@ -37,6 +37,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "humanoid_common_mpc/pinocchio_model/DynamicsHelperFunctions.h"
 #include "humanoid_wb_mpc/common/WBAccelMpcRobotModel.h"
 
+// 将用户的简单的上层指令（如“向前走”的速度指令或“去那里”的位置指令）
+// 转化为 MPC 控制器能够理解的、包含未来一段时间内完整状态序列的“目标轨迹”
+
 namespace ocs2::humanoid {
 
 WBMpcTargetTrajectoriesCalculator::WBMpcTargetTrajectoriesCalculator(const std::string& referenceFile,
@@ -85,10 +88,11 @@ TargetTrajectories WBMpcTargetTrajectoriesCalculator::commandedVelocityToTargetT
   // velocity profile.
 
   vector_t currentPoseTarget = getCurrentBasePoseTarget(initState);
+  // Filter and transform velocity commands (v_x, v_y, v_yaw), but NOT v_z (height)
+  // v_z is interpreted as absolute target height, not a velocity
   vector4_t commVelTargetGlobal = filterAndTransformVelCommandToLocal(commandedVelocities, currentPoseTarget(3), 0.8);
-
-  // // Adapt desired base height from velocity command
-  // currentPoseTarget[2] = commVelTargetGlobal[2];
+  // Override v_z with the original commanded height (no filtering)
+  commVelTargetGlobal[2] = commandedVelocities[2];
 
   vector6_t targetBaseVel;
   targetBaseVel << commVelTargetGlobal(0), commVelTargetGlobal(1), 0.0, commVelTargetGlobal(3), 0.0, 0.0;
@@ -104,6 +108,7 @@ TargetTrajectories WBMpcTargetTrajectoriesCalculator::commandedVelocityToTargetT
   averageVel(1) = (baseVel[1] + commVelTargetGlobal[1]) / 2;
   averageVel(2) = (baseVel[5] + commVelTargetGlobal[3]) / 2;
 
+  // Use commanded height directly as absolute target height
   currentPoseTarget[2] = commVelTargetGlobal[2];
   vector6_t intermediateTargetPose = integrateTargetBasePose(currentPoseTarget, averageVel, commVelTargetGlobal(2), intermediateTargetTime);
 

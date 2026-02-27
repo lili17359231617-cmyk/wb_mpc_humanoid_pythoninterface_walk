@@ -29,6 +29,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ******************************************************************************/
 
 #include <iostream>
+#include <stdexcept>
 #include <string>
 
 // Pinocchio forward declarations must be included first
@@ -43,6 +44,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <ocs2_core/soft_constraint/StateInputSoftConstraint.h>
 #include <ocs2_oc/synchronized_module/SolverSynchronizedModule.h>
 #include <ocs2_pinocchio_interface/PinocchioEndEffectorKinematicsCppAd.h>
+#include <ocs2_sqp/SqpMpc.h>
 
 #include <humanoid_common_mpc/pinocchio_model/createPinocchioModel.h>
 #include "humanoid_common_mpc/HumanoidCostConstraintFactory.h"
@@ -56,6 +58,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "humanoid_wb_mpc/cost/JointTorqueCostCppAd.h"
 #include "humanoid_wb_mpc/dynamics/WBAccelDynamicsAD.h"
 #include "humanoid_wb_mpc/end_effector/PinocchioEndEffectorDynamicsCppAd.h"
+#include "humanoid_wb_mpc/synchronized_module/MpcWeightAdjustmentModule.h"
 
 // Boost
 #include <boost/filesystem/operations.hpp>
@@ -66,9 +69,10 @@ namespace ocs2::humanoid {
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
+// 资源初始化
 WBMpcInterface::WBMpcInterface(const std::string& taskFile, const std::string& urdfFile, const std::string& referenceFile, bool setupOCP)
-    : taskFile_(taskFile), urdfFile_(urdfFile), referenceFile_(referenceFile), modelSettings_(taskFile, urdfFile, "wb_mpc_", "true") {
-  // check that task file exists
+    : modelSettings_(taskFile, urdfFile, "wb_mpc_", "true"), taskFile_(taskFile), urdfFile_(urdfFile), referenceFile_(referenceFile) {
+  // check that task file exists 确保 taskFile（任务参数）、urdfFile（机器人模型）和 referenceFile（步态参考）都存在
   boost::filesystem::path taskFilePath(taskFile);
   if (boost::filesystem::exists(taskFilePath)) {
     std::cerr << "[WBMpcInterface] Loading task file: " << taskFilePath << std::endl;
@@ -92,24 +96,24 @@ WBMpcInterface::WBMpcInterface(const std::string& taskFile, const std::string& u
 
   loadData::loadCppDataType(taskFile, "interface.verbose", verbose_);
 
-  // load setting from loading file
+  // load setting from loading file 通过 loadSettings 函数族载入 DDP、MPC、SQP 等算法的具体求解参数（例如预测步长、迭代次数）
   ddpSettings_ = ddp::loadSettings(taskFile, "ddp", verbose_);
   mpcSettings_ = mpc::loadSettings(taskFile, "mpc", verbose_);
   rolloutSettings_ = rollout::loadSettings(taskFile, "rollout", verbose_);
   sqpSettings_ = sqp::loadSettings(taskFile, "multiple_shooting", verbose_);
 
-  // PinocchioInterface
+  // PinocchioInterface 创建机器人的刚体动力学内核
   pinocchioInterfacePtr_.reset(new PinocchioInterface(createCustomPinocchioInterface(taskFile, urdfFile, modelSettings_)));
 
-  // Setup WB State Input Mapping
+  // Setup WB State Input Mapping 创建 x 和 u 的映射模型（普通版用于计算，AD 版用于自动微分）
   mpcRobotModelPtr_.reset(new WBAccelMpcRobotModel<scalar_t>(modelSettings_));
   mpcRobotModelADPtr_.reset(new WBAccelMpcRobotModel<ad_scalar_t>(modelSettings_));
 
-  // Swing trajectory planner
+  // Swing trajectory planner 管理摆动腿轨迹
   std::unique_ptr<SwingTrajectoryPlanner> swingTrajectoryPlanner(
       new SwingTrajectoryPlanner(loadSwingTrajectorySettings(taskFile, "swing_trajectory_config", verbose_), N_CONTACTS));
 
-  // Mode schedule manager
+  // Mode schedule manager 管理步态
   referenceManagerPtr_ =
       std::make_shared<SwitchedModelReferenceManager>(GaitSchedule::loadGaitSchedule(referenceFile, modelSettings_, verbose_),
                                                       std::move(swingTrajectoryPlanner), *pinocchioInterfacePtr_, *mpcRobotModelPtr_);
@@ -127,7 +131,17 @@ WBMpcInterface::WBMpcInterface(const std::string& taskFile, const std::string& u
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
+// Reset MPC/MRT internal state（供 python 调用）
+void WBMpcInterface::reset() {
+  if (mpcPtr_) {
+    mpcPtr_->reset();
+  }
+  if (mpcMrtPtr_) {
+    mpcMrtPtr_->reset();
+  }
+}
 
+// 建立最优控制问题
 void WBMpcInterface::setupOptimalControlProblem() {
   HumanoidCostConstraintFactory factory =
       HumanoidCostConstraintFactory(taskFile_, referenceFile_, *referenceManagerPtr_, *pinocchioInterfacePtr_, *mpcRobotModelPtr_,
@@ -136,23 +150,24 @@ void WBMpcInterface::setupOptimalControlProblem() {
   // Optimal control problem
   problemPtr_.reset(new OptimalControlProblem);
 
-  // Dynamics
+  // Dynamics 系统动力学模型，MPC 预测未来状态的依据
   std::unique_ptr<SystemDynamicsBase> dynamicsPtr;
   const std::string modelName = "dynamics";
   dynamicsPtr.reset(new WBAccelDynamicsAD(*pinocchioInterfacePtr_, *mpcRobotModelADPtr_, modelName, modelSettings_));
 
   problemPtr_->dynamicsPtr = std::move(dynamicsPtr);
 
-  // Cost terms
+  // Cost terms ， 对应 Q 和 R 矩阵
   problemPtr_->costPtr->add("stateInputQuadraticCost", factory.getStateInputQuadraticCost());
   // problemPtr_->costPtr->add("jointTorqueCost", getJointTorqueCost(taskFile_));
   problemPtr_->finalCostPtr->add("terminalCost", factory.getTerminalCost());
 
-  // Constraints
+  // Constraints 软约束：关节限位、足端碰撞
   problemPtr_->stateSoftConstraintPtr->add("jointLimits", factory.getJointLimitsConstraint());
   problemPtr_->stateSoftConstraintPtr->add("FootCollisionSoftConstraint", factory.getFootCollisionConstraint());
   // Constraint terms
 
+  // 足端追踪，让机器人能按照预定的轨迹抬腿
   EndEffectorDynamicsWeights footTrackingCostWeights =
       EndEffectorDynamicsWeights::getWeights(taskFile_, "task_space_foot_cost_weights.", verbose_);
 
@@ -161,6 +176,8 @@ void WBMpcInterface::setupOptimalControlProblem() {
   boost::property_tree::read_info(taskFile_, pt);
   bool hasMimicJoints = loadData::containsPtreeValueFind(pt, "mimicJoints");
 
+  // 软约束：摩擦锥（frictionForceCone）防止打滑，接触力矩（contactMomentXY）防止脚底翻转
+  // 硬约束：足端零加速度、零速度等
   for (size_t i = 0; i < N_CONTACTS; i++) {
     const std::string& footName = modelSettings_.contactNames[i];
 
@@ -187,14 +204,14 @@ void WBMpcInterface::setupOptimalControlProblem() {
                                                         *eeDynamicsPtr, *mpcRobotModelADPtr_, i, footTrackingCostName, modelSettings_)));
   }
 
-  // Pre-computation
+  // Pre-computation 在求解开始前先算好所有脚的雅可比矩阵，提高频率
   problemPtr_->preComputationPtr.reset(
       new WBMpcPreComputation(*pinocchioInterfacePtr_, *referenceManagerPtr_->getSwingTrajectoryPlanner(), *mpcRobotModelPtr_));
 
-  // Rollout
+  // Rollout 用于生成预测轨迹
   rolloutPtr_.reset(new TimeTriggeredRollout(*problemPtr_->dynamicsPtr, rolloutSettings_));
 
-  // Initialization
+  // Initialization 利用重力补偿给出一个初始猜测，让 MPC 第一步就能站稳
   initializerPtr_.reset(new WeightCompInitializer(*pinocchioInterfacePtr_, *referenceManagerPtr_, *mpcRobotModelPtr_));
 }
 
@@ -202,6 +219,7 @@ void WBMpcInterface::setupOptimalControlProblem() {
 /******************************************************************************************************/
 /******************************************************************************************************/
 
+// 支撑腿约束：通过 PD 控制（位置误差 + 速度误差）反馈到加速度级，保证了机器人站立时的稳固性
 std::unique_ptr<StateInputConstraint> WBMpcInterface::getStanceFootConstraint(const EndEffectorDynamics<scalar_t>& eeDynamics,
                                                                               size_t contactPointIndex) {
   const ModelSettings::FootConstraintConfig& footCfg = modelSettings_.footConstraintConfig;
@@ -231,6 +249,8 @@ std::unique_ptr<StateInputConstraint> WBMpcInterface::getStanceFootConstraint(co
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
+
+// 关节联动约束：保证了 MPC 规划出的全身动作符合机器人的机械结构限制
 std::unique_ptr<StateInputConstraint> WBMpcInterface::getJointMimicConstraint(size_t mimicIndex) {
   boost::property_tree::ptree pt;
   boost::property_tree::read_info(taskFile_, pt);
@@ -283,11 +303,117 @@ std::unique_ptr<StateInputConstraint> WBMpcInterface::getNormalVelocityConstrain
 /******************************************************************************************************/
 /******************************************************************************************************/
 
+//
 std::unique_ptr<StateInputCost> WBMpcInterface::getJointTorqueCost(const std::string& taskFile) {
   vector_t jointTorqueWeights(mpcRobotModelPtr_->getJointDim());
   loadData::loadEigenMatrix(taskFile, "joint_torque_weights", jointTorqueWeights);
   return std::unique_ptr<StateInputCost>(
       new JointTorqueCostCppAd(jointTorqueWeights, *pinocchioInterfacePtr_, *mpcRobotModelADPtr_, "jointTorqueCost", modelSettings_));
+}
+
+/******************************************************************************************************/
+/******************************************************************************************************/
+/******************************************************************************************************/
+
+// 设置 MPC 求解器
+void WBMpcInterface::setupMpc() {
+  // 1. 初始化求解器
+  mpcPtr_.reset(new SqpMpc(mpcSettings_, sqpSettings_, *problemPtr_, *initializerPtr_));
+  // 通过 mpcPtr_ 获取底层求解器指针，再调用 setReferenceManager
+  mpcPtr_->getSolverPtr()->setReferenceManager(referenceManagerPtr_);
+  // 2. 关键：初始化并挂载权重调整模块
+  // 这样 OCS2 在 runMpc -> advanceMpc 时，会先调用该模块的 preSolverRun
+  weightAdjustmentModulePtr_.reset(new MpcWeightAdjustmentModule(*this));
+  mpcPtr_->getSolverPtr()->addSynchronizedModule(weightAdjustmentModulePtr_);
+
+  // 3. 初始化 MRT
+  mpcMrtPtr_.reset(new MPC_MRT_Interface(*mpcPtr_));
+}
+
+// 增加一个 getter 供 python_binding 调用
+std::shared_ptr<MpcWeightAdjustmentModule> WBMpcInterface::getWeightAdjustmentModule() {
+  return weightAdjustmentModulePtr_;
+}
+
+/******************************************************************************************************/
+/******************************************************************************************************/
+/******************************************************************************************************/
+
+// 执行一步 MPC 并返回当前最优控制指令
+vector_t WBMpcInterface::runMpc(const vector_t& observation, scalar_t time) {
+  const size_t stateDim = mpcRobotModelPtr_->getStateDim();
+  if (observation.size() != stateDim) {
+    throw std::invalid_argument(
+        "[WBMpcInterface::runMpc] observation size " + std::to_string(observation.size()) + " != MPC state dim " +
+        std::to_string(stateDim) +
+        ". Use get_state_dim() and pass OCS2 state [base_pos(3), base_euler(3), joint_pos(23), base_vel(3), euler_dot(3), joint_vel(23)].");
+  }
+  // 1. 设置观测值（当前仿真状态）
+  SystemObservation currentObs;
+  currentObs.time = time;
+  currentObs.state = observation;
+  currentObs.input.setZero(mpcRobotModelPtr_->getInputDim());  // 初始输入设为 0
+
+  mpcMrtPtr_->setCurrentObservation(currentObs);
+
+  // 2. 触发一次同步求解
+  // 注：在 Python RL 模式下，通常使用同步求解（advanceMpc）来确保获取结果
+  try {
+    mpcMrtPtr_->advanceMpc();
+  } catch (const std::exception& e) {
+    return vector_t::Zero(mpcRobotModelPtr_->getInputDim());  // 异常处理
+  }
+
+  // 3. 获取最优策略在当前时刻的插值结果
+  vector_t optimalInput;
+  vector_t optimalState;
+  size_t mode;
+  mpcMrtPtr_->updatePolicy();  // 同步求解器结果
+  mpcMrtPtr_->evaluatePolicy(time, observation, optimalState, optimalInput, mode);
+
+  return optimalInput;
+}
+
+/******************************************************************************************************/
+/******************************************************************************************************/
+/******************************************************************************************************/
+
+// 更新 MPC 权重
+void WBMpcInterface::updateMpcWeights(const ocs2::vector_t& newWeights) {
+  if (weightAdjustmentModulePtr_) {
+    // 2. 数据转换：将 Eigen::VectorXd (ocs2::vector_t) 转换为 std::vector<double>
+    // Eigen 的 .data() 返回底层连续内存的指针
+    std::vector<double> residualVec(newWeights.data(), newWeights.data() + newWeights.size());
+
+    // 3. 调用你定义的 setResidualWeights 函数
+    weightAdjustmentModulePtr_->setResidualWeights(residualVec);
+  }
+}
+
+/******************************************************************************************************/
+/******************************************************************************************************/
+/******************************************************************************************************/
+
+// 设置目标状态
+void WBMpcInterface::setTargetState(const vector_t& targetState) {
+  // 创建一个极简的目标轨迹：在 0 时刻达到 targetState，目标输入全为 0
+  TargetTrajectories targetTrajectories({0.0},                                              // 时间序列
+                                        {targetState},                                      // 状态序列
+                                        {vector_t::Zero(mpcRobotModelPtr_->getInputDim())}  // 输入序列
+  );
+
+  // 将目标轨迹交给参考管理器
+  referenceManagerPtr_->setTargetTrajectories(targetTrajectories);
+}
+
+/******************************************************************************************************/
+/******************************************************************************************************/
+/******************************************************************************************************/
+
+// 设置目标轨迹
+void WBMpcInterface::setTargetTrajectories(const TargetTrajectories& targetTrajectories) {
+  // 将目标轨迹交给参考管理器
+  referenceManagerPtr_->setTargetTrajectories(targetTrajectories);
 }
 
 }  // namespace ocs2::humanoid

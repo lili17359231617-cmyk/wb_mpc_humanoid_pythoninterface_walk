@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 project(robot_model)
+# 强制要求所有目标都生成位置无关代码
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-Wall -Wextra -Wpedantic -Werror=return-type)

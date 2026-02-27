@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 ############################################################
-# Standard Configuration 
+# Standard Configuration
 ############################################################
 mkfile_path := $(abspath $(lastword $(MAKEFILE_LIST)))
 current_path := $(dir $(mkfile_path))
@@ -58,12 +58,13 @@ PACKAGES ?= $(NMPC_PACKAGES) $(ROBOT_MODEL_PACKAGES) $(RUNTIME_PACKAGES)
 ############################################################
 BUILD_TYPE ?= Release
 BUILD_TESTING ?= ON
-BUILD_WITH_NINJA ?= ON
+# 设为 OFF 可避免与已有 Unix Makefiles 构建冲突；设为 ON 则使用 Ninja
+BUILD_WITH_NINJA ?= OFF
 PARALLEL_JOBS ?= 6
 CPP_VERSION ?= -std=c++20
 
 ############################################################
-# Set flags based on configuration 
+# Set flags based on configuration
 ############################################################
 
 COMMON_CMAKE_ARGS ?= \
@@ -179,26 +180,26 @@ launch-g1-dummy-sim:
 	cd ${build_dir} && \
 	source ${ros_source_file} && \
 	source install/setup.bash && \
-	ros2 launch g1_centroidal_mpc dummy_sim.launch.py 
+	ros2 launch g1_centroidal_mpc dummy_sim.launch.py
 
 launch-g1-sim:
 	cd ${build_dir} && \
 	source ${ros_source_file} && \
 	source install/setup.bash && \
-	ros2 launch g1_centroidal_mpc mujoco_sim.launch.py 
+	ros2 launch g1_centroidal_mpc mujoco_sim.launch.py
 
 
 launch-wb-g1-dummy-sim:
 	cd ${build_dir} && \
 	source ${ros_source_file} && \
 	source install/setup.bash && \
-	ros2 launch g1_wb_mpc dummy_sim.launch.py 
+	ros2 launch g1_wb_mpc dummy_sim.launch.py
 
 launch-wb-g1-sim:
 	cd ${build_dir} && \
 	source ${ros_source_file} && \
 	source install/setup.bash && \
-	ros2 launch g1_wb_mpc mujoco_sim.launch.py 
+	ros2 launch g1_wb_mpc mujoco_sim.launch.py
 
 run-ocs2-tests:
 	echo "make sure you call 'make build-relwithdebinfo' to build the tests before running them." && \

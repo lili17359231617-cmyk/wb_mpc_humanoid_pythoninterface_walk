@@ -26,6 +26,14 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ******************************************************************************/
+// 是连接 MuJoCo 物理引擎与机器人控制框架（由 RobotHWInterfaceBase 衍生）的核心接口。
+// 其主要目的是在仿真环境中模拟机器人的物理行为，并为上层控制器提供状态反馈和命令执行通道
+// 核心处理逻辑流程简述：
+// 输入：接收控制算法下发的 RobotJointAction（目标位置、速度、增益等）。
+// 计算：根据当前 RobotState 计算反馈扭矩，并填入 MuJoCo 的 ctrl 缓冲区。
+// 步进：调用 mj_step 进行物理模拟。
+// 输出：将更新后的物理状态回传给 threadSafeRobotState_ 供控制器读取。
+// 控制循环和物理推演逻辑位于 simulationStep 和 simulationLoop 函数里
 
 #include "mujoco_sim_interface/MujocoSimInterface.h"
 
@@ -52,7 +60,7 @@ MujocoSimInterface::MujocoSimInterface(const MujocoSimConfig& config, const std:
   const int errstr_sz = 1000;  // Define the size of the error buffer
   char errstr[errstr_sz];      // Declare the error string buffer
 
-  // option 1: parse and compile XML from file
+  // 加载 MuJoCo 的场景描述文件（XML）
   mujocoModel_ = mj_loadXML(config.scenePath.c_str(), NULL, errstr, errstr_sz);
   if (!mujocoModel_) {
     std::cerr << "Could not load MuJoCo model: " << config.scenePath << ". Error: " << std::strerror(errno) << std::endl;
@@ -133,7 +141,9 @@ MujocoSimInterface::MujocoSimInterface(const MujocoSimConfig& config, const std:
 
 MujocoSimInterface::~MujocoSimInterface() {
   terminate_.store(true);
+#if !SYNCHRONOUS_SIMULATION_MODE
   if (simulate_thread_.joinable()) simulate_thread_.join();
+#endif
 }
 
 /******************************************************************************************************/
@@ -299,7 +309,7 @@ void MujocoSimInterface::setSimState(const model::RobotState& robotState) {
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
-
+// 将 MuJoCo 的原始数据翻译成机器人状态并更新到 threadSafeRobotState_,供控制线程安全读取
 void MujocoSimInterface::updateThreadSafeRobotState() {
   // Update mujoco joint angles
   for (size_t i = 0; i < nActiveJoints_; ++i) {
@@ -353,8 +363,18 @@ void MujocoSimInterface::updateMetrics() {
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
-
+// 单步仿真逻辑
+// 将控制器下发的关节动作（位置、速度、扭矩等）转换为 MuJoCo 的控制信号，并执行仿真步进。
+// 将计算出的力矩填入 mujocoData_->ctrl 数组，由 MuJoCo 引擎在下一步物理计算中执行。
 void MujocoSimInterface::simulationStep() {
+#if SYNCHRONOUS_SIMULATION_MODE
+  static int step_count = 0;
+  step_count++;
+  if (step_count % 1000 == 0) {
+    std::cout << "[同步模式] 执行仿真步: " << step_count 
+              << ", 仿真时间: " << mujocoData_->time << " s" << std::endl;
+  }
+#endif
   threadSafeRobotJointAction_.copy_value(robotJointActionInternal_);
   for (size_t i = 0; i < nActuators_; ++i) {
     joint_index_t idx = activeRobotActuatorIndices_[i];
@@ -389,18 +409,22 @@ void MujocoSimInterface::simulationStep() {
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
-
+// 在独立线程中持续运行仿真
 void MujocoSimInterface::simulationLoop() {
+#if SYNCHRONOUS_SIMULATION_MODE
+  // 同步模式下此函数不执行任何操作
+  return;
+#else
+  // 原有异步循环逻辑保持不变
   simFps_.reset();
   metrics_.reset();
   auto nextWakeup = std::chrono::steady_clock::now();
   while (!terminate_.load()) {
     simulationStep();
-
-    // Sleep in case sim loop is faster than specified sim rate.
     nextWakeup += std::chrono::microseconds(timeStepMicro_);
     std::this_thread::sleep_until(nextWakeup);
   }
+#endif
 }
 
 /******************************************************************************************************/
@@ -416,11 +440,19 @@ void MujocoSimInterface::initSim() {
     renderer_->launchRenderThread();
   }
 }
-
+// 启动单独的仿真线程
 void MujocoSimInterface::startSim() {
-  if (!simInit_) initSim();
-  // Simulate in simulate_thread thread while rendering in this thread
+  simulationStep();
+  simInit_ = true;
+
+#if !SYNCHRONOUS_SIMULATION_MODE
+  if (!headless_) {
+    renderer_.reset(new MujocoRenderer(this));
+    renderer_->launchRenderThread();
+  }
+  // 仅在异步模式下启动仿真线程
   simulate_thread_ = std::thread(&MujocoSimInterface::simulationLoop, this);
+#endif
 }
 
 }  // namespace robot::mujoco_sim_interface

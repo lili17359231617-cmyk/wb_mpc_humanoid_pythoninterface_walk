@@ -27,6 +27,7 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ******************************************************************************/
+// 告诉 MPC 控制器，当给定某个动作（输入）时，人形机器人的身体状态在下一刻会如何变化。
 
 #include "humanoid_wb_mpc/dynamics/WBAccelDynamicsAD.h"
 

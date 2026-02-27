@@ -64,7 +64,15 @@ class IDMapBase {
   }
 
   size_t size() const {
-    return std::count_if(begin(), end(), [](const std::optional<T>& opt) { return opt.has_value(); });
+    // Manually count elements with values instead of using count_if
+    // to avoid iterator compatibility issues with custom iterators
+    size_t count = 0;
+    for (const auto& opt : map_elements_) {
+      if (opt.has_value()) {
+        ++count;
+      }
+    }
+    return count;
   }
 
   size_t capacity() const { return map_elements_.size(); }

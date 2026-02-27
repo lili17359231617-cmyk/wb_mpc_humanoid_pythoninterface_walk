@@ -51,6 +51,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "robot_core/Types.h"
 #include "robot_model/RobotHWInterfaceBase.h"
 
+// 添加同步模式控制宏
+// 设置为 1: 启用同步模式（手动调用 step()）
+// 设置为 0: 启用异步模式（后台自动运行）
+#define SYNCHRONOUS_SIMULATION_MODE 1
+
 namespace robot::mujoco_sim_interface {
 
 struct MujocoSimConfig {
@@ -84,6 +89,15 @@ class MujocoSimInterface : public robot::model::RobotHWInterfaceBase {
   const mjModel* getModel() const { return mujocoModel_; }
 
   const MujocoSimConfig& getConfig() const { return config_; }
+
+  // 同步模式接口
+#if SYNCHRONOUS_SIMULATION_MODE
+  // 直接调用单步仿真
+  void step() { simulationStep(); }
+
+  // 获取是否已初始化的状态
+  bool isSimInitialized() const { return simInit_; }
+#endif
 
  private:
   void setupJointIndexMaps();
@@ -126,7 +140,9 @@ class MujocoSimInterface : public robot::model::RobotHWInterfaceBase {
   std::atomic<bool> guiInitialized_{false};
 
   mutable std::mutex mujocoMutex_;  // Used to access mujoco model and data accross simulation and render threads.
+#if !SYNCHRONOUS_SIMULATION_MODE
   std::thread simulate_thread_;
+#endif
   std::unique_ptr<MujocoRenderer> renderer_;
 
   FPSTracker simFps_{"mujoco_sim"};

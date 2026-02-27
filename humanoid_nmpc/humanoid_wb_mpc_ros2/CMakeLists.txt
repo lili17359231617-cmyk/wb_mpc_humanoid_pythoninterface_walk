@@ -109,6 +109,8 @@ add_executable(humanoid_wb_mpc_sqp_node
   src/WBMpcSqpNode.cpp
 )
 ament_target_dependencies(humanoid_wb_mpc_sqp_node
+  rclcpp
+  humanoid_wb_mpc  # 确保加入依赖
   ${dependencies}
 )
 target_compile_options(humanoid_wb_mpc_sqp_node PUBLIC ${FLAGS})

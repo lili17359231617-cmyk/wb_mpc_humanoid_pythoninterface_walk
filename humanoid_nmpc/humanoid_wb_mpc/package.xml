@@ -21,12 +21,16 @@
   <depend>pinocchio</depend>
   <depend>humanoid_common_mpc</depend>
   <depend>robot_model</depend>
+  <depend>ocs2_oc</depend>
+  <depend>mujoco_sim_interface</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_clang_format</test_depend>
   <test_depend>ament_cmake_clang_tidy</test_depend>
   <test_depend>ament_cmake_cppcheck</test_depend>
 
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

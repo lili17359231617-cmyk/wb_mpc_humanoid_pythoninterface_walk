@@ -33,6 +33,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <ocs2_core/Types.h>
 #include <ocs2_core/penalties/Penalties.h>
 #include <ocs2_ddp/DDP_Settings.h>
+#include <ocs2_mpc/MPC_BASE.h>           //引入 MPC 基础类头文件
+#include <ocs2_mpc/MPC_MRT_Interface.h>  //引入 MPC MRT 接口头文件,用于获取控制结果
 #include <ocs2_mpc/MPC_Settings.h>
 #include <ocs2_oc/rollout/TimeTriggeredRollout.h>
 #include <ocs2_pinocchio_interface/PinocchioInterface.h>
@@ -46,6 +48,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "humanoid_wb_mpc/end_effector/EndEffectorDynamics.h"
 
 namespace ocs2::humanoid {
+// 前向声明权重同步模块类
+class MpcWeightAdjustmentModule;
 
 class WBMpcInterface final : public RobotInterface {
  public:
@@ -61,6 +65,26 @@ class WBMpcInterface final : public RobotInterface {
   WBMpcInterface(const std::string& taskFile, const std::string& urdfFile, const std::string& referenceFile, bool setupOCP = true);
 
   ~WBMpcInterface() override = default;
+
+  /**
+   * 核心封装：初始化 MPC 求解器
+   * 建议在构造函数 setupOCP = true 的逻辑后调用
+   */
+  void setupMpc();
+  /**
+   * 核心封装：执行一步 MPC 并返回当前最优控制指令
+   * @param observation 当前机器人状态 (q, v)
+   * @param time 当前仿真时间
+   * @return 最优控制输入 (对于该项目通常是关节加速度或力矩)
+   */
+  vector_t runMpc(const vector_t& observation, scalar_t time);
+  /**
+   * Reset MPC and MRT internal state (exposed to Python).
+   */
+  void reset();
+
+  // 供 Python 获取底层求解器指针（用于挂载权重同步模块）
+  MPC_BASE* getMpcPtr() { return mpcPtr_.get(); }
 
   const OptimalControlProblem& getOptimalControlProblem() const override { return *problemPtr_; }
 
@@ -84,6 +108,23 @@ class WBMpcInterface final : public RobotInterface {
 
   const WBAccelMpcRobotModel<scalar_t>& getMpcRobotModel() const { return *mpcRobotModelPtr_; }
   const WBAccelMpcRobotModel<ad_scalar_t>& getMpcRobotModelAD() const { return *mpcRobotModelADPtr_; }
+
+  /** OCS2 状态维度，供 Python 校验观测向量长度。格式: [base_pos(3), base_euler(3), joint_pos(23), base_vel(3), euler_dot(3), joint_vel(23)]
+   */
+  size_t getStateDim() const { return mpcRobotModelPtr_->getStateDim(); }
+  /** MPC 输入维度（接触力+关节加速度），供 Python 校验控制输出长度。 */
+  size_t getInputDim() const { return mpcRobotModelPtr_->getInputDim(); }
+
+  /// 增加获取该模块的接口（如果 Python 绑定需要）
+  std::shared_ptr<MpcWeightAdjustmentModule> getWeightAdjustmentModule();
+  // 使用专用的同步模块来管理权重
+  /**
+   * 供 Python 或其他模块调用，将 RL 输出的权重更新到 MPC 内部
+   * @param newWeights Eigen 格式的残差向量
+   */
+  void updateMpcWeights(const ocs2::vector_t& newWeights);
+  void setTargetState(const vector_t& targetState);
+  void setTargetTrajectories(const TargetTrajectories& targetTrajectories);
 
  private:
   void setupOptimalControlProblem();
@@ -110,6 +151,11 @@ class WBMpcInterface final : public RobotInterface {
   rollout::Settings rolloutSettings_;
   std::unique_ptr<RolloutBase> rolloutPtr_;
   std::unique_ptr<WeightCompInitializer> initializerPtr_;
+
+  // 新增：求解器和 MRT 接口
+  std::unique_ptr<MPC_BASE> mpcPtr_;                                      // MPC 求解器指针
+  std::unique_ptr<MPC_MRT_Interface> mpcMrtPtr_;                          // MPC MRT 接口指针
+  std::shared_ptr<MpcWeightAdjustmentModule> weightAdjustmentModulePtr_;  // 权重同步模块指针  // 权重同步模块指针2
 
   vector_t initialState_;
 

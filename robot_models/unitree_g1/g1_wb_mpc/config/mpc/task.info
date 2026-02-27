@@ -45,7 +45,7 @@ model_settings
     [1] "foot_r_contact"
   }
 
-  ; The Parent frames on which the contact frames are added. 
+  ; The Parent frames on which the contact frames are added.
   contactParentJointNames
   {
     [0] "left_ankle_roll_joint"
@@ -407,12 +407,12 @@ contacts
    ;; Translation vector from parent joint to contact frame ;;
    x  0.035
    y  0.0
-   z  -0.035    
+   z  -0.035
   }
-  contact_rectangle 
+  contact_rectangle
   {
     ;; length specified in contact frame ;;
-    x_max           0.09 
+    x_max           0.09
     x_min          -0.09
     y_max           0.03
     y_min          -0.03
@@ -423,13 +423,13 @@ contacts
     frictionCoefficient    0.4
     ; relaxed log barrier parameters
     mu                     0.2
-    delta                  5.0 
+    delta                  5.0
   }
   contactMomentXYSoftConstraint
   {
     ; relaxed log barrier parameters
     mu                     0.6
-    delta                  0.03 
+    delta                  0.03
   }
 }
 
@@ -437,7 +437,7 @@ jointLimits
 {
     ; relaxed log barrier parameters
     mu                     1200.0
-    delta                  0.1   
+    delta                  0.1
 }
 
 collision_constraint
@@ -456,5 +456,5 @@ collision_constraint
     }
     ; relaxed log barrier parameters
     mu                     1500
-    delta                  0.04        
+    delta                  0.04
   }

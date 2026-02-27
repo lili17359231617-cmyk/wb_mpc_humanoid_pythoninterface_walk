@@ -19,16 +19,22 @@
     "-it",
     "--net=host",
     "--privileged",
-    "-u", "${localEnv:USER_ID}:${localEnv:GROUP_ID}",
-    "-e", "DISPLAY",
-    "-e", "QT_X11_NO_MITSHM=1",
-    "-e", "XDG_RUNTIME_DIR=${localEnv:XDG_RUNTIME_DIR}",
+    "-u",
+    "${localEnv:USER_ID}:${localEnv:GROUP_ID}",
+    "-e",
+    "DISPLAY",
+    "-e",
+    "QT_X11_NO_MITSHM=1",
+    "-e",
+    "XDG_RUNTIME_DIR=${localEnv:XDG_RUNTIME_DIR}",
     "-e",
     "GIT_USER_NAME=$(git config --global user.name)",
     "-e",
     "GIT_USER_EMAIL=$(git config --global user.email)",
-    "-v", "/tmp/.X11-unix:/tmp/.X11-unix",
-    "-v", "${localEnv:XDG_RUNTIME_DIR}:${localEnv:XDG_RUNTIME_DIR}"
+    "-v",
+    "/tmp/.X11-unix:/tmp/.X11-unix",
+    "-v",
+    "${localEnv:XDG_RUNTIME_DIR}:${localEnv:XDG_RUNTIME_DIR}"
   ],
   "overrideCommand": true,
   "workspaceFolder": "/wb_humanoid_mpc_ws/src/wb_humanoid_mpc",
@@ -64,5 +70,5 @@
     "source=${localWorkspaceFolder}/../..,target=/wb_humanoid_mpc_ws,type=bind,consistency=cached",
     "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind"
   ],
-  "postCreateCommand": "git config --global user.name \"$GIT_USER_NAME\" && git config --global user.email \"$GIT_USER_EMAIL\" && git config --global --add safe.directory /wb_humanoid_mpc_ws/src/wb_humanoid_mpc && curl -o .git-completion.bash https://raw.githubusercontent.com/git/git/master/contrib/completion/git-completion.bash && echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc && echo 'source ./.git-completion.bash' >> ~/.bashrc"
+  "postCreateCommand": "git config --global user.name \"$GIT_USER_NAME\" && git config --global user.email \"$GIT_USER_EMAIL\" && git config --global --add safe.directory /wb_humanoid_mpc_ws/src/wb_humanoid_mpc && curl -o .git-completion.bash https://raw.githubusercontent.com/git/git/master/contrib/completion/git-completion.bash && echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc && echo 'source ./.git-completion.bash' >> ~/.bashrc && echo 'export LD_LIBRARY_PATH=/wb_humanoid_mpc_ws/install/hpipm_catkin/lib:/wb_humanoid_mpc_ws/install/blasfeo_catkin/lib:$LD_LIBRARY_PATH' >> ~/.bashrc && echo 'export PYTHONPATH=/wb_humanoid_mpc_ws/install/humanoid_wb_mpc/lib/python3.12/site-packages:$PYTHONPATH' >> ~/.bashrc"
 }

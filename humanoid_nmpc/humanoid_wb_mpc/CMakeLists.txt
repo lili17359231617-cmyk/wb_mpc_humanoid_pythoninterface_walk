@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 project(humanoid_wb_mpc)
+# 强制要求所有目标都生成位置无关代码
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-Wall -Wextra -Wpedantic -Werror=return-type)
@@ -8,17 +10,28 @@ endif ()
 # Generate compile_commands.json for clang tools
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# 1. 先找到 Python 开发库,再查找 pybind11
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+find_package(pybind11 REQUIRED)
+# 显式查找 Abseil 基础库
+find_package(absl REQUIRED)
+
 find_package(ament_cmake REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(ocs2_core REQUIRED)
-find_package(ocs2_centroidal_model REQUIRED)
-find_package(ocs2_ros2_interfaces REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(ocs2_core REQUIRED)   # 补齐缺失的依赖
+find_package(ocs2_oc REQUIRED)
 find_package(ocs2_mpc REQUIRED)
+find_package(ocs2_ddp REQUIRED)
 find_package(ocs2_sqp REQUIRED)
+find_package(ocs2_ros2_interfaces REQUIRED)
 find_package(ocs2_pinocchio_interface REQUIRED)
+find_package(ocs2_centroidal_model REQUIRED)
 find_package(humanoid_common_mpc REQUIRED)
 find_package(robot_model REQUIRED)
+find_package(mujoco_sim_interface REQUIRED)
 
 find_package(GTest REQUIRED)
 
@@ -42,6 +55,9 @@ set(CMAKE_CXX_STANDARD 20)
 
 set(FLAGS ${OCS2_CXX_FLAGS} -Wno-invalid-partial-specialization)
 
+# 计算项目根目录路径 (修正：向上两级以定位到 wb_humanoid_mpc)
+get_filename_component(PROJECT_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+
 include_directories(
   include
   test
@@ -50,6 +66,10 @@ include_directories(
   ${Boost_INCLUDE_DIRS}
   ${pinocchio_INCLUDE_DIRS}
   ${GTEST_INCLUDE_DIRS}
+  # 添加Mujoco仿真接口头文件路径
+  ${PROJECT_ROOT_DIR}/robot_runtime/mujoco_sim_interface/include
+  ${PROJECT_ROOT_DIR}/robot_runtime/robot_model/include
+  ${PROJECT_ROOT_DIR}/robot_runtime/robot_core/include
 )
 
 set(dependencies
@@ -64,6 +84,7 @@ set(dependencies
   ocs2_pinocchio_interface
   humanoid_common_mpc
   robot_model
+  ocs2_ddp   #加入dependencies列表,方便后续导出
 )
 
 link_directories(
@@ -93,17 +114,59 @@ add_library(${PROJECT_NAME}
   src/cost/JointTorqueCostCppAd.cpp
   src/command/WBMpcTargetTrajectoriesCalculator.cpp
   src/mrt/WBMpcMrtJointController.cpp
+  src/synchronized_module/MpcWeightAdjustmentModule.cpp # 新增
 )
 ament_target_dependencies(${PROJECT_NAME}
-  ${dependencies}
-) 
-target_link_libraries(${PROJECT_NAME}
-  ${Boost_LIBRARIES}
-  ${pinocchio_LIBRARIES}
+  ocs2_core
+  ocs2_oc
+  ocs2_mpc
+  ocs2_ddp
+  ocs2_sqp
+  ocs2_ros2_interfaces
+  ocs2_pinocchio_interface
+  ocs2_centroidal_model
+  humanoid_common_mpc
+  robot_model
+  rclcpp
+  mujoco_sim_interface
 )
+
+target_link_libraries(${PROJECT_NAME}
+  absl::raw_hash_set
+  absl::hash
+  absl::base
+  absl::strings
+  absl::raw_logging_internal
+)
+
+## 2. 创建 Python 模块 ##
+pybind11_add_module(humanoid_wb_mpc_py
+  src/python/python_binding.cpp
+)
+
+target_include_directories(humanoid_wb_mpc_py PRIVATE
+  ${PROJECT_ROOT_DIR}/robot_runtime/mujoco_sim_interface/include
+  ${PROJECT_ROOT_DIR}/robot_runtime/robot_model/include
+  ${PROJECT_ROOT_DIR}/robot_runtime/robot_core/include
+)
+
+# 链接所有库（使用 PRIVATE 关键字以与 pybind11 保持兼容）
+target_link_libraries(humanoid_wb_mpc_py PRIVATE
+    ${PROJECT_NAME}             # 链接你自己的 C++ 库
+    pybind11::module            # pybind11 必须
+    Python3::Python
+    mujoco                      # 外部仿真库
+    glfw
+    GLEW
+    ${Boost_LIBRARIES}
+    absl::flat_hash_map
+    absl::raw_hash_set
+    absl::base
+    absl::strings
+    absl::hash
+)
+
 target_compile_options(${PROJECT_NAME} PUBLIC ${OCS2_CXX_FLAGS})
-
-
 
 
 #############
@@ -111,17 +174,26 @@ target_compile_options(${PROJECT_NAME} PUBLIC ${OCS2_CXX_FLAGS})
 #############
 
 install(TARGETS ${PROJECT_NAME}
+  EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
+  INCLUDES DESTINATION include
 )
 
-install(DIRECTORY include/${PROJECT_NAME}
-  DESTINATION include/
+# 将头文件物理安装到 install 目录
+install(
+  DIRECTORY include/
+  DESTINATION include
 )
 
-# install(TARGETS 
-#   test_pinocchio_model 
+# 将模块安装到 Python 站点包路径下
+install(TARGETS humanoid_wb_mpc_py
+  DESTINATION lib
+)
+
+# install(TARGETS
+#   test_pinocchio_model
 #   test_humanoid_interface
 #   test_contact_moment_xy_constraint
 #   test_end_effector_kinematic_cost_element
@@ -132,7 +204,23 @@ install(DIRECTORY include/${PROJECT_NAME}
 #   DESTINATION share/${PROJECT_NAME}
 # )
 
+ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)  # 导出目标
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
 ament_export_dependencies(${dependencies})
+
+# 安装 ament hook 文件用于自动设置 PYTHONPATH
+install(
+  DIRECTORY share/${PROJECT_NAME}/hook
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY share/${PROJECT_NAME}/environment
+  DESTINATION share/${PROJECT_NAME}
+)
+
 ament_package()
+
+
+

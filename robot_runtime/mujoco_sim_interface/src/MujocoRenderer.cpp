@@ -34,6 +34,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <condition_variable>
 #include <csignal>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -330,6 +331,14 @@ void MujocoRenderer::initialize() {
 
   // create window, make OpenGL context current, request v-sync
   window_ = glfwCreateWindow(viewportWidth, viewportHeight, "Mujoco Robot Sim", nullptr, nullptr);
+  if (!window_) {
+    const char* description;
+    int code = glfwGetError(&description);
+    std::cerr << "Failed to create GLFW window. Error code: " << code << ", Description: " << (description ? description : "Unknown")
+              << std::endl;
+    std::cerr << "Check DISPLAY environment variable: " << (getenv("DISPLAY") ? getenv("DISPLAY") : "not set") << std::endl;
+    mju_error("Could not create GLFW window");
+  }
   glfwMakeContextCurrent(window_);
 
   // init glew

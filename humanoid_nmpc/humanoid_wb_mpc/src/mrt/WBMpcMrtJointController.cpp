@@ -27,6 +27,61 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ******************************************************************************/
 
+/**
+ * @file WBMpcMrtJointController.cpp
+ * @brief MPC控制输出到电机输出的转换实现
+ *
+ * @section MPC控制流程概述
+ *
+ * 本控制器实现了MPC（模型预测控制）输出到机器人电机控制的转换。MPC优化的输出包括：
+ *   1. 期望轨迹状态 (mpcPolicyState): 包含期望的关节角度、速度、基座位置/姿态等
+ *   2. 控制输入 (mpcPolicyInput): 包含足端接触力/力矩、关节加速度
+ *   3. 接触模式 (mpcPolicyMode): 指示哪些脚处于支撑相
+ *
+ * @section 控制量转换流程
+ *
+ * MPC输出 -> 电机输出的转换遵循以下步骤：
+ *
+ *   Step 1: 获取MPC策略输出
+ *           - 从MPC获取期望状态和控制输入
+ *
+ *   Step 2: 逆动力学计算关节力矩
+ *           - 输入: 足端力/力矩 (W_left, W_right) + 关节加速度 (qdd_joints)
+ *           - 处理: 使用Pinocchio计算质量矩阵M、非线性项nle、足端雅可比矩阵J
+ *           - 公式: τ_joints = M * qdd + nle - J^T * F_ext
+ *           - 输出: 各关节需要输出的力矩 τ_joints
+ *
+ *   Step 3: 提取期望轨迹
+ *           - 从MPC状态中提取期望关节角度 q_des
+ *           - 从MPC状态中提取期望关节速度 qd_des
+ *
+ *   Step 4: 生成电机控制指令
+ *           - 使用PD控制律 + 前馈力矩
+ *           - 最终输出: motor_torque = kp * (q_des - q_current) + kd * (qd_des - qd_current) + feed_forward_effort
+ *
+ * @section 输入输出向量定义
+ *
+ * 状态向量 x = [p_base, euler, q_joints, v_base, euler_d, qd_joints]^T
+ *   - p_base (3): 基座在世界坐标系下的位置
+ *   - euler (3): 基座姿态的ZYX欧拉角
+ *   - q_joints (n): 关节角度
+ *   - v_base (3): 基座在世界坐标系下的线速度
+ *   - euler_d (3): 欧拉角导数
+ *   - qd_joints (n): 关节速度
+ *
+ * 输入向量 u = [W_l, W_r, qdd_joints]^T
+ *   - W_l (6): 左脚末端接触力/力矩 [f_x, f_y, f_z, M_x, M_y, M_z]
+ *   - W_r (6): 右脚末端接触力/力矩 [f_x, f_y, f_z, M_x, M_y, M_z]
+ *   - qdd_joints (n): 关节加速度
+ *
+ * 电机控制指令 = [q_des, qd_des, kp, kd, feed_forward_effort]
+ *   - q_des: 期望关节角度
+ *   - qd_des: 期望关节速度
+ *   - kp: 位置环比例增益
+ *   - kd: 速度环微分增益
+ *   - feed_forward_effort: 前馈力矩（来自逆动力学计算）
+ */
+
 #include "humanoid_wb_mpc/mrt/WBMpcMrtJointController.h"
 
 #include <ocs2_robotic_tools/common/RotationDerivativesTransforms.h>
@@ -122,6 +177,78 @@ void WBMpcMrtJointController::updateMpcObservation(ocs2::SystemObservation& mpcO
 /******************************************************************************************************/
 /******************************************************************************************************/
 
+/**
+ * @brief 计算关节控制动作 - MPC输出到电机输出的核心转换函数
+ *
+ * @details
+ * 此函数是MPC控制器与电机执行器之间的桥梁，负责将MPC优化结果转换为电机控制指令。
+ *
+ * 转换流程详解：
+ * ┌─────────────────────────────────────────────────────────────────────────────┐
+ * │                        MPC输出到电机输出转换流程                              │
+ * ├─────────────────────────────────────────────────────────────────────────────┤
+ * │                                                                              │
+ * │   ┌──────────────────┐     ┌──────────────────────────────────────────┐     │
+ * │   │   MPC 优化结果    │     │                                          │     │
+ * │   │                  │     │  Step 1: 获取MPC策略输出                    │     │
+ * │   │ • mpcPolicyState │────▶│    - 状态: 位置/速度/姿态                   │     │
+ * │   │ • mpcPolicyInput │     │    - 输入: 足端力/力矩 + 关节加速度          │     │
+ * │   │ • mpcPolicyMode  │     │    - 模式: 支撑相信息                       │     │
+ * │   └──────────────────┘     └──────────────────────────────────────────┘     │
+ * │                                  │                                          │
+ * │                                  ▼                                          │
+ * │   ┌──────────────────────────────────────────────────────────────────────┐  │
+ * │   │              Step 2: 逆动力学计算关节力矩                              │  │
+ * │   │                                                                       │  │
+ * │   │   输入:                                                                │  │
+ * │   │     • 足端接触力/力矩 W_left, W_right (6维)                            │  │
+ * │   │     • 关节加速度 qdd_joints                                           │  │
+ * │   │     • 关节位置 q、速度 qd                                             │  │
+ * │   │                                                                       │  │
+ * │   │   计算过程:                                                            │  │
+ * │   │     1. 计算质量矩阵 M = CRBA(q)                                       │  │
+ * │   │     2. 计算非线性项 nle = NonLinearEffects(q, qd)                     │  │
+ * │   │     3. 计算足端雅可比矩阵 J_left, J_right                             │  │
+ * │   │     4. 投影足端力到关节空间: F_joint = J^T * W                         │  │
+ * │   │     5. 逆动力学: τ = M * qdd + nle - F_joint                          │  │
+ * │   │                                                                       │  │
+ * │   │   物理意义:                                                            │  │
+ * │   │     τ = 惯性力 + 重力/科氏力/离心力 - 外力引起的力                      │  │
+ * │   └──────────────────────────────────────────────────────────────────────┘  │
+ * │                                  │                                          │
+ * │                                  ▼                                          │
+ * │   ┌──────────────────────────────────────────────────────────────────────┐  │
+ * │   │              Step 3: 提取期望轨迹                                      │  │
+ * │   │                                                                       │  │
+ * │   │   • mpc_q_desired  = 从MPC状态中提取关节角度                           │  │
+ * │   │   • mpc_qd_desired = 从MPC状态中提取关节速度                           │  │
+ * │   └──────────────────────────────────────────────────────────────────────┘  │
+ * │                                  │                                          │
+ * │                                  ▼                                          │
+ * │   ┌──────────────────────────────────────────────────────────────────────┐  │
+ * │   │              Step 4: 生成电机控制指令 (PD + 前馈)                      │  │
+ * │   │                                                                       │  │
+ * │   │   最终电机力矩 = FeedForward + Kp * (q_des - q) + Kd * (qd_des - qd)   │  │
+ * │   │                                                                       │  │
+ * │   │   控制器参数:                                                          │  │
+ * │   │     • kp = 1200.0  (位置环比例增益)                                   │  │
+ * │   │     • kd = 10.0    (速度环微分增益)                                   │  │
+ * │   │     • feed_forward_effort = 逆动力学计算的关节力矩                      │  │
+ * │   └──────────────────────────────────────────────────────────────────────┘  │
+ * │                                  │                                          │
+ * │                                  ▼                                          │
+ * │   ┌──────────────────┐                                                         │
+ * │   │   电机控制指令     │                                                         │
+ * │   │   RobotJointAction │◀──── 写入到各关节控制结构                           │
+ * │   │                  │     - q_des, qd_des, kp, kd, feed_forward_effort    │
+ * │   └──────────────────┘                                                         │
+ * │                                                                              │
+ * └─────────────────────────────────────────────────────────────────────────────┘
+ *
+ * @param [in] time 当前仿真时间
+ * @param [in] robotState 机器人当前状态（传感器反馈）
+ * @param [out] robotJointAction 输出到执行器的电机控制指令
+ */
 void WBMpcMrtJointController::computeJointControlAction(scalar_t time,
                                                         const ::robot::model::RobotState& robotState,
                                                         ::robot::model::RobotJointAction& robotJointAction) {

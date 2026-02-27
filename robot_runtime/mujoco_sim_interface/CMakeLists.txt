@@ -40,6 +40,12 @@ find_package(GLEW REQUIRED)
 
 set(CMAKE_CXX_STANDARD 20)
 
+# 为了能将静态库链接进 Python 扩展（共享库），必须启用 PIC
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# 不强制共享库，让 ament 处理
+# set(BUILD_SHARED_LIBS ON)
+
 include_directories(
   include
   test
@@ -67,7 +73,7 @@ add_library(${PROJECT_NAME}
 )
 ament_target_dependencies(${PROJECT_NAME}
   ${dependencies}
-) 
+)
 target_link_libraries(${PROJECT_NAME}
   ${Boost_LIBRARIES}
   ${urdf_LIBRARIES}
@@ -105,15 +111,15 @@ endif()
 ## Install ##
 #############
 
-install(TARGETS 
+install(TARGETS
   ${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
 
-install(TARGETS 
-  mujoco_sim_no_torques 
+install(TARGETS
+  mujoco_sim_no_torques
   DESTINATION lib/${PROJECT_NAME}
 )
 
