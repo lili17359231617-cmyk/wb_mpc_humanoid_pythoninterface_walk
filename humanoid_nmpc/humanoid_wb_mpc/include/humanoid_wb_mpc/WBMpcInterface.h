@@ -37,6 +37,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <ocs2_mpc/MPC_MRT_Interface.h>  //引入 MPC MRT 接口头文件,用于获取控制结果
 #include <ocs2_mpc/MPC_Settings.h>
 #include <ocs2_oc/rollout/TimeTriggeredRollout.h>
+#include <ocs2_oc/synchronized_module/SolverSynchronizedModule.h>
 #include <ocs2_pinocchio_interface/PinocchioInterface.h>
 #include <ocs2_robotic_tools/common/RobotInterface.h>
 #include <ocs2_sqp/SqpSettings.h>
@@ -85,6 +86,12 @@ class WBMpcInterface final : public RobotInterface {
 
   // 供 Python 获取底层求解器指针（用于挂载权重同步模块）
   MPC_BASE* getMpcPtr() { return mpcPtr_.get(); }
+
+  /**
+   * 将 SolverSynchronizedModule 挂到 MPC 求解器（与 C++ WBMpcRobotSim 一致）。
+   * 须在 setupMpc() 之后调用；求解器每次求解前会调用该模块的 preSolverRun(initTime, finalTime, initState)。
+   */
+  void addSynchronizedModule(std::shared_ptr<ocs2::SolverSynchronizedModule> module);
 
   const OptimalControlProblem& getOptimalControlProblem() const override { return *problemPtr_; }
 

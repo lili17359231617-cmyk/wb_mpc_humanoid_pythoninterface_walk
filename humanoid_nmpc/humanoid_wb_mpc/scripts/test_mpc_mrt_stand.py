@@ -28,6 +28,27 @@ _mpc_lib = "/wb_humanoid_mpc_ws/install/humanoid_wb_mpc/lib"
 if os.path.isdir(_mpc_lib) and _mpc_lib not in sys.path:
     sys.path.insert(0, _mpc_lib)
 
+# 先预加载系统 libglfw 与 libGLEW（RTLD_GLOBAL），避免 humanoid_wb_mpc_py 加载时出现 undefined symbol（glfwSetScrollCallback / glewInit）
+try:
+    import ctypes
+    _r = ctypes.RTLD_GLOBAL
+    try:
+        ctypes.CDLL("libglfw.so.3", mode=_r)
+    except OSError:
+        try:
+            ctypes.CDLL("libglfw.so", mode=_r)
+        except OSError:
+            pass
+    try:
+        ctypes.CDLL("libGLEW.so.2.2", mode=_r)
+    except OSError:
+        try:
+            ctypes.CDLL("libGLEW.so", mode=_r)
+        except OSError:
+            pass
+except Exception:
+    pass
+
 try:
     import humanoid_wb_mpc_py as mpc_py
 except ImportError as e:

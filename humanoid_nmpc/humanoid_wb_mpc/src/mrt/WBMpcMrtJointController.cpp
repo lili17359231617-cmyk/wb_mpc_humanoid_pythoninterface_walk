@@ -173,6 +173,12 @@ void WBMpcMrtJointController::updateMpcObservation(ocs2::SystemObservation& mpcO
   mpcObservation.mode = stanceLeg2ModeNumber(contactFlags);
 }
 
+vector_t WBMpcMrtJointController::getMpcStateFromRobotState(const ::robot::model::RobotState& robotState) const {
+  vector_t state = vector_t::Zero(mpcRobotModel_.getStateDim());
+  const_cast<WBMpcMrtJointController*>(this)->updateMpcState(state, robotState);
+  return state;
+}
+
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/

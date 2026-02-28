@@ -330,6 +330,13 @@ void WBMpcInterface::setupMpc() {
   mpcMrtPtr_.reset(new MPC_MRT_Interface(*mpcPtr_));
 }
 
+void WBMpcInterface::addSynchronizedModule(std::shared_ptr<ocs2::SolverSynchronizedModule> module) {
+  if (!mpcPtr_ || !mpcPtr_->getSolverPtr()) {
+    throw std::runtime_error("[WBMpcInterface::addSynchronizedModule] setupMpc() must be called first.");
+  }
+  mpcPtr_->getSolverPtr()->addSynchronizedModule(std::move(module));
+}
+
 // 增加一个 getter 供 python_binding 调用
 std::shared_ptr<MpcWeightAdjustmentModule> WBMpcInterface::getWeightAdjustmentModule() {
   return weightAdjustmentModulePtr_;

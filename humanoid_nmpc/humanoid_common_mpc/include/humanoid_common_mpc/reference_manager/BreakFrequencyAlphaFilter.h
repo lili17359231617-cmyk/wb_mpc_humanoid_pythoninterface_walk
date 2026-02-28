@@ -50,7 +50,9 @@ class BreakFrequencyAlphaFilter final {
   vector_t getFilteredVector(const vector_t& x) {
     assert(x.size() == y_last_.size());
     scalar_t alpha = computeAlpha();
-    return (alpha * x + (1 - alpha) * y_last_);
+    y_last_ = alpha * x + (1 - alpha) * y_last_;
+    lastTimeFilterCalled = std::chrono::steady_clock::now();
+    return y_last_;
   }
 
  private:

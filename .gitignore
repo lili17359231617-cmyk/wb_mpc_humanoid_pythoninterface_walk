@@ -60,3 +60,11 @@ install/
 **/.gdb_history
 
 .git-completion.bash
+
+# Auto-generated code (cppad)
+humanoid_nmpc/humanoid_wb_mpc/**/cppad_code_gen/
+humanoid_nmpc/humanoid_wb_mpc/**/cppad_generated/
+
+# Training logs (TensorBoard etc.)
+humanoid_nmpc/humanoid_wb_mpc/python/scripts/ppo_g1_logs/
+**/*.tfevents.*

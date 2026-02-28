@@ -25,7 +25,11 @@
 
 // MPC 和控制器头文件
 #include <ocs2_core/reference/TargetTrajectories.h>
+#include "humanoid_common_mpc/command/WalkingVelocityCommand.h"
 #include "humanoid_common_mpc/common/ModelSettings.h"
+#include "humanoid_common_mpc/gait/GaitSchedule.h"
+#include "humanoid_common_mpc/gait/ModeSequenceTemplate.h"
+#include "humanoid_common_mpc/reference_manager/ProceduralMpcMotionManager.h"
 #include "humanoid_common_mpc/reference_manager/SwitchedModelReferenceManager.h"
 #include "humanoid_common_mpc/swing_foot_planner/SwingTrajectoryPlanner.h"
 #include "humanoid_wb_mpc/WBMpcInterface.h"
@@ -45,6 +49,32 @@
 namespace py = pybind11;
 using namespace ocs2::humanoid;
 using namespace robot::model;
+
+// 一个面向 Python 的轻量封装，用于在无 ROS2 的场景下复用 C++ 的 ProceduralMpcMotionManager
+class ProceduralMpcMotionManagerPy {
+ public:
+  ProceduralMpcMotionManagerPy(std::shared_ptr<ProceduralMpcMotionManager> impl,
+                               std::shared_ptr<SwitchedModelReferenceManager> ref_manager,
+                               ocs2::scalar_t mpc_horizon)
+      : impl_(std::move(impl)), ref_manager_(std::move(ref_manager)), mpc_horizon_(mpc_horizon) {}
+
+  // vel_cmd: [v_x, v_y, desired_pelvis_height, v_yaw]
+  void set_velocity_command(const Eigen::Ref<const Eigen::Vector4d>& vel_cmd) {
+    WalkingVelocityCommand cmd(vel_cmd);
+    impl_->setAndScaleVelocityCommand(cmd);
+  }
+
+  // 每个控制周期调用一次，用于根据当前指令和状态更新目标轨迹与步态
+  void update_references(ocs2::scalar_t init_time, const Eigen::Ref<const ocs2::vector_t>& init_state) {
+    const ocs2::scalar_t final_time = init_time + mpc_horizon_;
+    impl_->preSolverRun(init_time, final_time, init_state, *ref_manager_);
+  }
+
+ private:
+  std::shared_ptr<ProceduralMpcMotionManager> impl_;
+  std::shared_ptr<SwitchedModelReferenceManager> ref_manager_;
+  ocs2::scalar_t mpc_horizon_;
+};
 
 // =============================================================================
 // 用于 STL/optional 绑定的辅助结构体
@@ -244,6 +274,49 @@ PYBIND11_MODULE(humanoid_wb_mpc_py, m) {
            "给定腿索引与时间，返回着地邻近因子 (用于代价/约束缩放)")
       .def("__repr__", [](const SwingTrajectoryPlanner&) { return "<SwingTrajectoryPlanner>"; });
 
+  // ModeSequenceTemplate：步态模板（一个周期内的模式切换时间和模式序列）
+  py::class_<ModeSequenceTemplate>(m, "ModeSequenceTemplate",
+                                   R"(步态模式序列模板：由一段周期内的切换时间和对应的 ModeNumber 序列构成。
+
+switching_times: [t0, t1, ..., tN]，t0 通常为 0，tN 为一个周期时长
+mode_sequence   : [m0, m1, ..., m_{N-1}]，在 [ti, t_{i+1}] 区间内使用模式 mi。)")
+      .def(py::init([](const std::vector<double>& switchingTimes, const std::vector<size_t>& modeSequence) {
+             return ModeSequenceTemplate(switchingTimes, modeSequence);
+           }),
+           py::arg("switching_times"), py::arg("mode_sequence"), "使用切换时间数组和模式 ID 数组构造一个步态模板")
+      .def_readwrite("switching_times", &ModeSequenceTemplate::switchingTimes, "切换时间序列")
+      .def_readwrite("mode_sequence", &ModeSequenceTemplate::modeSequence, "模式 ID 序列（参见 MotionPhaseDefinition::ModeNumber）")
+      .def("__repr__", [](const ModeSequenceTemplate& tpl) {
+        std::ostringstream os;
+        os << tpl;
+        return os.str();
+      });
+
+  // GaitSchedule：步态调度器，管理当前的 ModeSchedule，并允许在指定时间插入新的模板
+  py::class_<GaitSchedule, std::shared_ptr<GaitSchedule>>(
+      m, "GaitSchedule", R"(步态调度器：内部维护当前的 ModeSchedule，可以在给定时间区间插入新的 ModeSequenceTemplate 并自动平铺到未来。)")
+      .def("insert_mode_sequence_template", &GaitSchedule::insertModeSequenceTemplate, py::arg("mode_sequence_template"),
+           py::arg("start_time"), py::arg("final_time"),
+           R"(在 [start_time, final_time] 区间插入新的步态模板。
+
+典型用法：
+  tpl = ModeSequenceTemplate(
+      switching_times=[0.0, 0.3, 0.6],
+      mode_sequence=[ocs2_mode_RF, ocs2_mode_LF]  # 例如 1=RF, 2=LF, 3=STANCE
+  )
+  gait_schedule = interface.get_switched_model_reference_manager_ptr().get_gait_schedule()
+  gait_schedule.insert_mode_sequence_template(tpl, start_time=当前时间, final_time=当前时间+2.0))");
+
+  // get_gait_map: 使用 gait.info 文件解析出 {gait_name: ModeSequenceTemplate} 字典
+  m.def(
+      "get_gait_map",
+      [](const std::string& gait_file, bool verbose) {
+        const auto gaitMap = getGaitMap(gait_file, verbose);
+        return gaitMap;  // 依赖 pybind11 对 std::map<std::string, ModeSequenceTemplate> 的自动转换
+      },
+      py::arg("gait_file"), py::arg("verbose") = false,
+      R"(从 gait.info 等配置文件中读取所有可用步态，返回 {gait_name: ModeSequenceTemplate} 字典。)");
+
   py::class_<SwitchedModelReferenceManager, std::shared_ptr<SwitchedModelReferenceManager>>(
       m, "SwitchedModelReferenceManager",
       R"(切换模型参考管理器：管理步态相位、接触状态与摆动腿规划器。
@@ -368,6 +441,10 @@ PYBIND11_MODULE(humanoid_wb_mpc_py, m) {
       // 线程管理
       .def("start_mpc_thread", &WBMpcMrtJointController::startMpcThread, py::arg("init_robot_state"), "启动后台 MPC 求解器线程")
 
+      // 从 RobotState 得到 MPC 状态向量（供 ProceduralMpcMotionManager.update_references 使用）
+      .def("get_mpc_state_from_robot_state", &WBMpcMrtJointController::getMpcStateFromRobotState, py::arg("robot_state"),
+           "从当前 RobotState 得到 OCS2 MPC 状态向量 [base_pos(3), base_euler(3), joint_pos(n), base_vel(3), euler_dot(3), joint_vel(n)]")
+
       // 控制计算
       // 注意: compute_joint_control_action 的 actions 参数类型是 RobotJointAction& (基于 JointIdMap 的容器)
       // 而非 std::vector<JointAction>
@@ -419,6 +496,57 @@ PYBIND11_MODULE(humanoid_wb_mpc_py, m) {
            )")
 
       .def("__repr__", [](const MpcWeightAdjustmentModule& self) { return "<MpcWeightAdjustmentModule>"; });
+
+  // =============================================================================
+  // 5.5 ProceduralMpcMotionManagerPy 绑定（无 ROS2 的程序化行走/高度管理）
+  // =============================================================================
+
+  py::class_<ProceduralMpcMotionManagerPy, std::shared_ptr<ProceduralMpcMotionManagerPy>>(m, "ProceduralMpcMotionManager")
+      .def(py::init([](const std::string& gait_file, const std::string& reference_file, WBMpcInterface& interface) {
+             // 复用与 C++ WBMpcRobotSim 相同的组件：参考管理器 + 机器人模型 + 目标轨迹计算器
+             auto ref_manager = interface.getSwitchedModelReferenceManagerPtr();
+             auto& mpc_robot_model = interface.getMpcRobotModel();
+             const auto mpc_settings = interface.mpcSettings();
+
+             auto traj_calculator =
+                 std::make_shared<WBMpcTargetTrajectoriesCalculator>(reference_file, mpc_robot_model, mpc_settings.timeHorizon_);
+
+             ProceduralMpcMotionManager::VelocityTargetToTargetTrajectories fun =
+                 [traj_calculator](const ocs2::vector4_t& vel_target, ocs2::scalar_t init_time, ocs2::scalar_t /*final_time*/,
+                                   const ocs2::vector_t& init_state) {
+                   // 与 C++ 中的用法一致：final_time 未被使用
+                   return traj_calculator->commandedVelocityToTargetTrajectories(vel_target, init_time, init_state);
+                 };
+
+             auto impl = std::make_shared<ProceduralMpcMotionManager>(gait_file, reference_file, ref_manager, mpc_robot_model, fun);
+
+             // 与 C++ WBMpcRobotSim 一致：将 manager 挂到 MPC 求解器，使每次求解前在求解器线程内调用 preSolverRun
+             interface.addSynchronizedModule(impl);
+
+             return std::make_shared<ProceduralMpcMotionManagerPy>(impl, ref_manager, mpc_settings.timeHorizon_);
+           }),
+           py::arg("gait_file"), py::arg("reference_file"), py::arg("interface"),
+           R"(
+           创建与 C++ ProceduralMpcMotionManager 等价的程序化行走/高度管理器（不依赖 ROS2）。
+
+           参数:
+               gait_file: gait.info 路径
+               reference_file: reference.info 路径
+               interface: 已初始化并调用过 setup_mpc() 的 WBMpcInterface
+           )")
+      .def("set_velocity_command", &ProceduralMpcMotionManagerPy::set_velocity_command, py::arg("vel_command"),
+           R"(
+           设置行走/高度指令（内部会自动进行限幅、滤波以及与步态联动）。
+
+           vel_command: numpy 向量 [v_x, v_y, desired_pelvis_height, v_yaw]
+           )")
+      .def("update_references", &ProceduralMpcMotionManagerPy::update_references, py::arg("init_time"), py::arg("init_state"),
+           R"(
+           根据当前指令和机器人状态，更新 MPC 的目标轨迹和 GaitSchedule。
+           一般在每个控制周期调用一次:
+
+               manager.update_references(current_time, mpc_state)
+           )");
 
   // =============================================================================
   // 6. MujocoSimInterface 绑定

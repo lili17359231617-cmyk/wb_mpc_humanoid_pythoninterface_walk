@@ -71,6 +71,9 @@ class WBMpcMrtJointController final : public ::robot::model::ControlBase {
 
   void startMpcThread(const ::robot::model::RobotState& initRobotState);
 
+  /** Returns the MPC state vector corresponding to the given RobotState (for use with ProceduralMpcMotionManager). */
+  vector_t getMpcStateFromRobotState(const ::robot::model::RobotState& robotState) const;
+
  private:
   /**
    * Handles the MPC solver thread.
