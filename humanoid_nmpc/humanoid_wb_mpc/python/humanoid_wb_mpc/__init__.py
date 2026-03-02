@@ -19,42 +19,48 @@ G1人形机器人MPC控制的Python接口包
     env.run()
 """
 
-from .core import (
-    StateConverter,
-    JointMapper,
-    ActionFormatter,
-    MPC_JOINT_NAMES,
-    WRIST_JOINT_NAMES,
-    ALL_JOINT_NAMES,
-    DEFAULT_PD_GAINS,
-    DEFAULT_MAX_TORQUE,
-    get_mpc_interface,
-    get_controller
-)
-
-from .sim_interface import (
-    MujocoEnv,
-    HumanoidEnv
+# 仅立即导入 RL 权重环境，避免加载 core/sim_interface（会 import mujoco）导致无头下 OpenGL 报错
+from .envs import (
+    G1MpcWeightEnv,
+    make_g1_mpc_weight_env,
 )
 
 __version__ = "1.0.0"
 __author__ = "Humanoid MPC Team"
 
 __all__ = [
-    # 核心工具
     "StateConverter",
     "JointMapper",
     "ActionFormatter",
-    # 常量
     "MPC_JOINT_NAMES",
     "WRIST_JOINT_NAMES",
     "ALL_JOINT_NAMES",
     "DEFAULT_PD_GAINS",
     "DEFAULT_MAX_TORQUE",
-    # 便捷函数
     "get_mpc_interface",
     "get_controller",
-    # 仿真环境
     "MujocoEnv",
     "HumanoidEnv",
+    "G1MpcEnv",
+    "G1MpcWeightEnv",
+    "make_g1_mpc_weight_env",
 ]
+
+
+def __getattr__(name):
+    """延迟加载 core、sim_interface、G1MpcEnv，避免无头环境下提前 import mujoco 触发 OpenGL 错误。"""
+    if name in (
+        "StateConverter", "JointMapper", "ActionFormatter",
+        "MPC_JOINT_NAMES", "WRIST_JOINT_NAMES", "ALL_JOINT_NAMES",
+        "DEFAULT_PD_GAINS", "DEFAULT_MAX_TORQUE",
+        "get_mpc_interface", "get_controller",
+    ):
+        from . import core
+        return getattr(core, name)
+    if name in ("MujocoEnv", "HumanoidEnv"):
+        from . import sim_interface
+        return getattr(sim_interface, name)
+    if name == "G1MpcEnv":
+        from .envs import G1MpcEnv
+        return G1MpcEnv
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

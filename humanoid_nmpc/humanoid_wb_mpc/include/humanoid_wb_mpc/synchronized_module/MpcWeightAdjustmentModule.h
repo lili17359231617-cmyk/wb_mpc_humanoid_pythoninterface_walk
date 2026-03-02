@@ -29,7 +29,7 @@ class MpcWeightAdjustmentModule : public SolverSynchronizedModule {
 
   /**
    * @brief 供外部调用（如 Python 封装层）设置最新的残差动作
-   * @param residualActions 70 维向量，对应 RL 策略的输出 a
+   * @param residualActions 58 维向量，对应 RL 策略的输出 a（与 MPC 状态/Q 维一致）
    */
   void setResidualWeights(const std::vector<double>& residualActions);
 

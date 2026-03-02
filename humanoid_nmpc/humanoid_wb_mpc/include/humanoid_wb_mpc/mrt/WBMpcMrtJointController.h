@@ -69,6 +69,14 @@ class WBMpcMrtJointController final : public ::robot::model::ControlBase {
                                  const ::robot::model::RobotState& robotState,
                                  ::robot::model::RobotJointAction& robotJointAction) override;
 
+  /**
+   * 同步单步：不依赖后台线程，在当前线程内执行一次 advanceMpc + 策略求值 + 关节控制计算。
+   * 用于验证「无线程、连续 run_mpc + simulation_step」的同步性。
+   */
+  void computeJointControlActionSynchronous(scalar_t time,
+                                            const ::robot::model::RobotState& robotState,
+                                            ::robot::model::RobotJointAction& robotJointAction);
+
   void startMpcThread(const ::robot::model::RobotState& initRobotState);
 
   /** Returns the MPC state vector corresponding to the given RobotState (for use with ProceduralMpcMotionManager). */

@@ -18,7 +18,7 @@ class G1MpcEnv(gym.Env):
         self.data = mujoco.MjData(self.model)
 
         # 3. 定义空间
-        self.action_space = spaces.Box(low=-0.5, high=0.5, shape=(70,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-0.5, high=0.5, shape=(58,), dtype=np.float32)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(58,), dtype=np.float32)
 
     def reset(self, seed=None, options=None):
@@ -53,7 +53,7 @@ class G1MpcEnv(gym.Env):
         return obs.astype(np.float32)
 
     def step(self, action):
-        # 1. 将 70 维残差注入 MPC 权重矩阵
+        # 1. 将 58 维残差注入 MPC 权重矩阵
         self.weight_module.set_residual_weights(action.tolist())
 
         # 2. 执行物理步进 (例如运行 10 次子步以匹配 MPC 频率)

@@ -5,12 +5,12 @@
 namespace ocs2::humanoid {
 
 MpcWeightAdjustmentModule::MpcWeightAdjustmentModule(WBMpcInterface& interface) : interface_(interface) {
-  currentResidual_.assign(70, 0.0);  // 初始残差为0
+  currentResidual_.assign(58, 0.0);  // 初始残差为0，与 Q 矩阵状态维一致
 }
 
 // 这个函数供外部（将来是 Python）高频调用
 void MpcWeightAdjustmentModule::setResidualWeights(const std::vector<double>& residualActions) {
-  if (residualActions.size() != 70) return;
+  if (residualActions.size() != 58) return;
 
   std::lock_guard<std::mutex> lock(residualMutex_);
   currentResidual_ = residualActions;

@@ -255,6 +255,69 @@ vector_t WBMpcMrtJointController::getMpcStateFromRobotState(const ::robot::model
  * @param [in] robotState 机器人当前状态（传感器反馈）
  * @param [out] robotJointAction 输出到执行器的电机控制指令
  */
+void WBMpcMrtJointController::computeJointControlActionSynchronous(scalar_t time,
+                                                                   const ::robot::model::RobotState& robotState,
+                                                                   ::robot::model::RobotJointAction& robotJointAction) {
+  updateMpcObservation(currentMpcObservation_, robotState);
+  mcpMrtInterface_.setCurrentObservation(currentMpcObservation_);
+
+  if (!mcpMrtInterface_.initialPolicyReceived()) {
+    mcpMrtInterface_.resetMpcNode(currentObservationToResetTrajectory(mcpMrtInterface_.getCurrentObservation()));
+  }
+  mcpMrtInterface_.advanceMpc();
+  if (!mcpMrtInterface_.updatePolicy()) {
+    std::cerr << "[WBMpcMrtJointController::computeJointControlActionSynchronous] "
+                 "updatePolicy failed, applying weight compensation."
+              << std::endl;
+  }
+
+  vector_t mpcPolicyState;
+  vector_t mpcPolicyInput;
+  size_t mpcPolicyMode;
+
+  if (mcpMrtInterface_.initialPolicyReceived()) {
+    mcpMrtInterface_.evaluatePolicy(currentMpcObservation_.time + 0.005, currentMpcObservation_.state, mpcPolicyState, mpcPolicyInput,
+                                    mpcPolicyMode);
+
+    vector_t mpcJointTorques = computeJointTorques<scalar_t>(mpcPolicyState, mpcPolicyInput, pinocchioInterface_, mpcRobotModel_);
+    vector_t mpc_q_desired = mpcRobotModel_.getJointAngles(mpcPolicyState);
+    vector_t mpc_qd_desired = mpcRobotModel_.getJointVelocities(mpcPolicyState, mpcPolicyInput);
+
+    for (size_t i = 0; i < mpcJointIndices_.size(); i++) {
+      size_t index = mpcJointIndices_[i];
+      robot::model::JointAction& action = robotJointAction.at(index).value();
+      action.q_des = mpc_q_desired[i];
+      action.qd_des = mpc_qd_desired[i];
+      action.kp = 1200.0;
+      action.kd = 10.0;
+      action.feed_forward_effort = mpcJointTorques[i];
+    }
+  } else {
+    mpcPolicyState = currentMpcObservation_.state;
+    mpcPolicyInput = weightCompensatingInput(pinocchioInterface_, {true, true}, mpcRobotModel_);
+    vector_t weightCompensatingTorques = computeJointTorques<scalar_t>(mpcPolicyState, mpcPolicyInput, pinocchioInterface_, mpcRobotModel_);
+    for (size_t i = 0; i < mpcJointIndices_.size(); i++) {
+      size_t index = mpcJointIndices_[i];
+      robot::model::JointAction& action = robotJointAction.at(index).value();
+      action.q_des = 0;
+      action.qd_des = 0;
+      action.kp = 0;
+      action.kd = 0;
+      action.feed_forward_effort = weightCompensatingTorques[i];
+    }
+  }
+
+  for (size_t i = 0; i < otherJointIndices_.size(); i++) {
+    size_t index = otherJointIndices_[i];
+    robot::model::JointAction& action = robotJointAction.at(index).value();
+    action.q_des = 0;
+    action.qd_des = 0;
+    action.kp = 100;
+    action.kd = 1.0;
+    action.feed_forward_effort = 0.0;
+  };
+}
+
 void WBMpcMrtJointController::computeJointControlAction(scalar_t time,
                                                         const ::robot::model::RobotState& robotState,
                                                         ::robot::model::RobotJointAction& robotJointAction) {

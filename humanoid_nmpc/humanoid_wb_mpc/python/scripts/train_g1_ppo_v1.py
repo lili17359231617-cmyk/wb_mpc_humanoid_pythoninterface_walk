@@ -1,60 +1,92 @@
+"""
+G1 MPC 权重 PPO 训练脚本
+
+使用包内配置与环境：默认使用 G1MpcWeightEnv（仿真同步多速率），
+也可切换为 G1MpcEnv（简化 MuJoCo 步进）。路径从 humanoid_wb_mpc.config 读取。
+"""
+
 import os
 import sys
 
-# 1. 将 python/ 根目录加入搜索路径，以便能找到 humanoid_wb_mpc 包
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
-    sys.path.append(project_root)
+    sys.path.insert(0, project_root)
 
-# 2. 将 C++ 编译产物的路径加入搜索路径
-cpp_module_path = "/wb_humanoid_mpc_ws/install/humanoid_wb_mpc/lib/python3.12/site-packages"
-if cpp_module_path not in sys.path:
-    sys.path.append(cpp_module_path)
-# ----------------------------
+# 在导入 humanoid_wb_mpc 前加入 C++ 扩展路径（否则包 __init__ -> core 会先 import humanoid_wb_mpc_py 报错）
+_ws = os.environ.get("WB_HUMANOID_MPC_WS", "/wb_humanoid_mpc_ws")
+_install = os.path.join(_ws, "install", "humanoid_wb_mpc")
+_py_ver = "python{}.{}".format(sys.version_info.major, sys.version_info.minor)
+for _candidate in (
+    os.path.join(_install, "lib", _py_ver, "site-packages"),
+    os.path.join(_install, "lib"),
+):
+    if os.path.isdir(_candidate) and _candidate not in sys.path:
+        sys.path.insert(0, _candidate)
+        break
+if "MUJOCO_GL" not in os.environ:
+    os.environ["MUJOCO_GL"] = "egl" if os.environ.get("HEADLESS", "0") == "1" or not os.environ.get("DISPLAY") else "glfw"
 
-import gymnasium as gym
+import humanoid_wb_mpc.bootstrap  # noqa: F401
 from stable_baselines3 import PPO
-from humanoid_wb_mpc.envs.G1MpcEnv import G1MpcEnv
+from humanoid_wb_mpc.config import (
+    DEFAULT_TASK_FILE,
+    DEFAULT_URDF_FILE,
+    DEFAULT_REF_FILE,
+)
+from humanoid_wb_mpc import make_g1_mpc_weight_env
+
+# 是否使用完整仿真环境（G1MpcWeightEnv）；False 则使用简化 G1MpcEnv（会导入 mujoco，需 GL）
+USE_WEIGHT_ENV = True
+
 
 def main():
-    # 路径定义 (建议使用绝对路径)
-    task_p = "/wb_humanoid_mpc_ws/src/wb_humanoid_mpc/robot_models/unitree_g1/g1_wb_mpc/config/mpc/task.info"
-    urdf_p = "/wb_humanoid_mpc_ws/src/wb_humanoid_mpc/robot_models/unitree_g1/g1_description/urdf/g1_29dof.urdf"
-    ref_p  = "/wb_humanoid_mpc_ws/src/wb_humanoid_mpc/robot_models/unitree_g1/g1_wb_mpc/config/command/reference.info"
+    if USE_WEIGHT_ENV:
+        print("正在初始化 G1 MPC 权重环境（仿真同步多速率）...")
+        env = make_g1_mpc_weight_env(
+            task_file=DEFAULT_TASK_FILE,
+            urdf_file=DEFAULT_URDF_FILE,
+            ref_file=DEFAULT_REF_FILE,
+            headless=True,
+            seed=42,
+        )
+    else:
+        from humanoid_wb_mpc.envs import G1MpcEnv
+        print("正在初始化 G1 MPC 强化学习环境（简化）...")
+        env = G1MpcEnv(DEFAULT_TASK_FILE, DEFAULT_URDF_FILE, DEFAULT_REF_FILE)
 
-    # 1. 实例化环境
-    print("正在初始化 G1 MPC 强化学习环境...")
-    env = G1MpcEnv(task_p, urdf_p, ref_p)
+    total_steps = int(os.environ.get("TOTAL_TIMESTEPS", 200_000))
+    tb_log_dir = os.environ.get("TB_LOG_DIR", "./ppo_g1_logs/phase1_short")
 
-    # 2. 配置算法
-    # 对于 70 维的残差控制，建议使用较大的网络层宽
     policy_kwargs = dict(net_arch=[dict(pi=[256, 256], qf=[256, 256])])
-
     model = PPO(
         "MlpPolicy",
         env,
         verbose=1,
-        tensorboard_log="./ppo_g1_logs",  # TensorBoard 日志目录
+        tensorboard_log=tb_log_dir,
         learning_rate=1e-4,
-        n_steps=2048,            # 增加采样步数，让梯度估计更准确
-        batch_size=128,          # 增大 batch_size，减少梯度噪声
-        n_epochs=10,             # 每一轮采样后学习 10 遍
-        gamma=0.99,              # 远期折扣率
-        clip_range=0.1,          # 强制限制策略更新幅度
-        ent_coef=0.01,           # 增加好奇心，防止过快收敛到“秒跪”
-        target_kl=0.01,          # 核心：将 KL 散度强制锁定在 0.01 附近
+        n_steps=2048,
+        batch_size=128,
+        n_epochs=10,
+        gamma=0.99,
+        clip_range=0.1,
+        ent_coef=0.01,
+        target_kl=0.01,
         policy_kwargs=policy_kwargs,
-        device="auto"
+        device="auto",
     )
 
-    # 3. 开始学习
-    print("🚀 启动训练:G1 步态残差优化...")
-    model.learn(total_timesteps=1_000_000, progress_bar=True)
+    # 第一阶段短训练试跑：1e5～2e5 steps（单 env），用于观察 reward / episode length 曲线
+    print("🚀 启动训练: G1 步态残差优化（Phase1 短训练）...")
+    print(f"   总步数: {total_steps:,} | TensorBoard: {tb_log_dir}")
+    model.learn(total_timesteps=total_steps, progress_bar=True)
+    save_name = f"g1_ppo_residual_v1_phase1_{total_steps}"
+    model.save(save_name)
+    print(f"✅ 训练模型已保存为 {save_name}.zip")
+    tb_abs = os.path.abspath(tb_log_dir)
+    print(f"   查看曲线: tensorboard --logdir {tb_abs}")
+    print(f"   （或先 cd 到本脚本所在目录再: tensorboard --logdir {tb_log_dir}）")
 
-    # 4. 保存模型
-    model.save("g1_ppo_residual_v1")
-    print("✅ 训练模型已保存为 g1_ppo_residual_v1.zip")
 
 if __name__ == "__main__":
     main()

@@ -266,8 +266,8 @@ def main():
 
             # 可选：通过 RL 策略注入权重
             # if weight_adjustment_module is not None:
-            #     # 示例：假设 RL 策略输出 70 个权重值
-            #     # rl_weights = np.random.randn(70)  # 替换为实际的 RL 策略输出
+            #     # 示例：假设 RL 策略输出 58 个权重值
+            #     # rl_weights = np.random.randn(58)  # 替换为实际的 RL 策略输出
             #     # weight_adjustment_module.set_residual_weights(rl_weights.tolist())
             #     pass
 
