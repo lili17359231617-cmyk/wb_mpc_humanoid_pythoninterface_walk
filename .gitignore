@@ -49,6 +49,7 @@ install/
 **/__pycache__/**
 
 # MuJoCo log
+MUJOCO_LOG.TXT
 */MUJOCO_LOG.TXT
 *mjData.bin
 

@@ -100,8 +100,11 @@ COMMON_COLCON_BUILD_FLAGS ?= \
 ############################################################
 # Define build and test targets
 ############################################################
+# Use system Python for colcon/ament (avoid .venv so catkin_pkg from ROS is found)
 define default-build-package
 	cd ${build_dir} && \
+	export PATH="/usr/bin:$$PATH" && \
+	unset VIRTUAL_ENV && \
 	export MAKEFLAGS="-j ${PARALLEL_JOBS} -d" && \
 	source ${ros_source_file} && \
 	colcon build ${COMMON_COLCON_BUILD_FLAGS} --packages-up-to $(1) \
@@ -111,6 +114,8 @@ endef
 
 define default-build-python-package
 	cd ${build_dir} && \
+	export PATH="/usr/bin:$$PATH" && \
+	unset VIRTUAL_ENV && \
 	source ${ros_source_file} && \
 	colcon build ${COMMON_COLCON_BUILD_FLAGS} --packages-up-to $(1)
 endef

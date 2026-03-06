@@ -1,7 +1,27 @@
-# Python dependencies for Whole Body MPC project
-# Core dependencies (required)
+# Python dependencies for Whole Body MPC project (root package)
+# Install: pip3 install -r requirements.txt
+# In container (system Python): pip3 install --break-system-packages -r requirements.txt
+#
+# RL envs (G1MpcEnv / G1MpcWeightEnv) use gymnasium; PPO 训练用 stable_baselines3.
+# G1MpcEnv、sim_interface 等使用 Python mujoco 仿真，需 mujoco。
+# Sub-packages (install via .devcontainer/install_python_deps.sh or separately):
+#   humanoid_nmpc/humanoid_common_mpc_pyutils/requirements.txt  (numpy, pandas, vpselector)
+#   humanoid_nmpc/remote_control/requirements.txt               (pygame, customtkinter; for remote GUI)
+# See .devcontainer/首次打开与迁移.md for full dependency and migration instructions.
+
+# Core (required for MPC scripts and envs)
 numpy>=1.20.0
 scipy>=1.7.0
+gymnasium>=0.29.0
 
-# Optional dependencies (uncomment if needed)
-# pynput>=1.7.0  # For interactive keyboard control in test_mpc_mrt_walk.py
+# MuJoCo Python bindings (G1MpcEnv, sim_interface, test_mpc_PD+G.py)
+mujoco>=3.0.0
+
+# PPO training (train_g1_ppo_v1.py; pulls in torch)
+stable_baselines3>=2.0.0
+tensorboard
+tqdm
+rich
+# Optional (uncomment if needed)
+# pynput>=1.7.0   # Interactive keyboard in test_mpc_mrt_walk.py
+# mujoco_viewer   # Alternative viewer in test_mpc_PD+G.py

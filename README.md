@@ -10,11 +10,11 @@ This repository contains a Whole-Body Nonlinear Model Predictive Controller (NMP
 It contains the following hardware platform agnostic MPC fromulations:
 
 ### Centroidal Dynamics MPC
-The centroidal MPC optimizes over the **whole-body kinematics** and the center off mass dynamics, with a choice to either use a single rigid 
+The centroidal MPC optimizes over the **whole-body kinematics** and the center off mass dynamics, with a choice to either use a single rigid
 body model or the full centroidal dynamics. This specific approach builds up on the centroidal model in ocs2 by generalizing costs and constraints to a 6 DoF contact among others. I am still working on documenting this. Until then a conscise explanation of the ocs2 centroidal model can be found here [Sleiman et. al., A Unified MPC Framework for Whole-Body Dynamic Locomotion and Manipulation](https://arxiv.org/abs/2103.00946)
 
 ### Whole-Body Dynamics MPC
-The **whole-body dynamics** MPC optimized over the contact forces and joint accelerations with the option to compute the joint torques for 
+The **whole-body dynamics** MPC optimized over the contact forces and joint accelerations with the option to compute the joint torques for
 each step planned accross the horizon. I am still working on documenting and publishing the approach. The most relevant information on the choosen approach can currently be found in [Galliker et al., Bipedal Locomotion with Nonlinear Model Predictive Control:
 Online Gait Generation using Whole-Body Dynamics](http://ames.caltech.edu/galliker2022bipedal.pdf)
 ### Robot Examples
@@ -28,13 +28,23 @@ The project supports the following robot examples:
 
 ## Get Started
 
+### 迁移到新设备 / 首次打开容器
+
+在新机器上使用或从其他设备迁移时，请优先阅读：**[首次打开与迁移说明](.devcontainer/首次打开与迁移.md)**。其中包含：
+
+- 环境要求（内存、磁盘、Docker/ROS2）
+- 依赖清单（系统 apt + Python pip，便于复现）
+- 三种使用方式：Dev Container（推荐）、Docker 脚本、本地安装
+- 首次编译步骤与验证
+- 迁移检查清单
+
 ### Setup Colcon Workspace
 
 Create a colcon workspace and clone the repository into the src folder:
 
 ```bash
 mkdir -p humanoid_mpc_ws/src && cd humanoid_mpc_ws/src
-git clone https://github.com/1x-technologies/wb-humanoid-mpc.git
+git clone https://github.com/lili17359231617-cmyk/wb_mpc_humanoid_pythoninterface_walk.git
 ```
 
 Then initialize all submodules using:
@@ -44,7 +54,7 @@ cd wb-humanoid-mpc
 git submodule update --init --recursive
 ```
 ### Install Dependencies
-The project supports both Dockerized workspaces (recommended) or a local installation for developing and running the humanoid MPC. 
+The project supports both Dockerized workspaces (recommended) or a local installation for developing and running the humanoid MPC.
 
 <details>
 <summary>Build & run Dockerized workspace in VS Code</summary>
@@ -74,26 +84,37 @@ cd /path/to/humanoid_mpc_ws/src/wb_humanoid_mpc/docker
 <details>
 <summary>Install Dependencies Locally</summary>
 
-Make sure you have **ros2** installed on your system as e.g specified for jazzy in
-the [installation guide](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html).
+Make sure you have **ROS2** installed on your system (e.g. [Jazzy installation guide](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html)).
 
-Then install all dependencies using:
+**System dependencies (apt):**
 
 ```bash
+cd /path/to/wb_humanoid_mpc
+export ROS_DISTRO=jazzy
 envsubst < dependencies.txt | xargs sudo apt install -y
 ```
+
+**Python dependencies (pip):**
+
+```bash
+pip3 install --user -r requirements.txt
+pip3 install --user -r humanoid_nmpc/humanoid_common_mpc_pyutils/requirements.txt
+# Optional (remote control GUI): pip3 install --user -r humanoid_nmpc/remote_control/requirements.txt
+```
+
+See [首次打开与迁移说明](.devcontainer/首次打开与迁移.md) for the full dependency list and migration steps.
 </details>
 
 
-### Building the MPC 
+### Building the MPC
 
 Building the WB MPC consumes a significant amount of RAM. We recommend saving all open work before starting the first build. The RAM usage can be adjusted by setting the PARALLEL_JOBS environment variable. Our recommendation is:
 
 | PARALLEL_JOBS | Required System RAM |
 |--------------:|--------------------:|
-| 2 (default)   |  16 GiB             | 
+| 2 (default)   |  16 GiB             |
 | 4             |  32 GiB              |
-| 6             |  64 GiB              | 
+| 6             |  64 GiB              |
 
 
 ```bash
@@ -101,7 +122,7 @@ make build-all
 ```
 
 ## Running the examples
-Once you run the NMPC a window with Rviz will appear for visualization. The first time you start the MPC for a certain robot model the auto differentiation code will be generated which might take up to 5-15 min depending on your system. Once done the robot appears and you can control it via an xbox gamepad or the controls in the terminal. 
+Once you run the NMPC a window with Rviz will appear for visualization. The first time you start the MPC for a certain robot model the auto differentiation code will be generated which might take up to 5-15 min depending on your system. Once done the robot appears and you can control it via an xbox gamepad or the controls in the terminal.
 
 On the top level folder run:
 
@@ -118,7 +139,7 @@ make launch-wb-g1-dummy-sim
 ```
 
 #### Interactive Robot Control
-Command a desired base velocity and root link height via **Robot Base Controller GUI** and **XBox Controller Joystick**. For the joystick it is easiest to directly connect via USB. Otherwise you need to install the required bluetooth Xbox controller drivers on your linux system. The GUI application automatically scanns for Joysticks and indicates whether one is connected. 
+Command a desired base velocity and root link height via **Robot Base Controller GUI** and **XBox Controller Joystick**. For the joystick it is easiest to directly connect via USB. Otherwise you need to install the required bluetooth Xbox controller drivers on your linux system. The GUI application automatically scanns for Joysticks and indicates whether one is connected.
 
 ![robot_remote_control](https://github.com/user-attachments/assets/779be1da-97a1-4d0c-8f9b-b9d2df88384f)
 
@@ -138,13 +159,13 @@ To cite the Whole-Body Humanoid MPC in your academic research, please consider c
 ## Acknowledgements
 Created and actively maintained by [Manuel Yves Galliker](https://github.com/manumerous).
 
-Special thanks go to [Nicholas Palermo](https://github.com/nicholaspalomo) for implementing the dockerization among other great inputs and contributions. 
+Special thanks go to [Nicholas Palermo](https://github.com/nicholaspalomo) for implementing the dockerization among other great inputs and contributions.
 
 This project is founded on the great work of many open-source contributors. I would especially like to acknowledge:
 - [ocs2](https://github.com/leggedrobotics/ocs2)
 - [pinocchio](https://github.com/stack-of-tasks/pinocchio)
 - [hpipm](https://github.com/giaf/hpipm)
-  
-Part of this work was developed during my time at [1X Technologies](https://www.1x.tech/). I would like to kindly thank Eric Jang and Bernt Børnich for supporting the open sourcing of this project. 
 
-Further I would like to thank Michael Purcell, Jesper Smith, Simon Zimmermann, Joel Filho, Paal Arthur Schjelderup Thorseth, Varit (Ohm) Vichathorn, Sjur Grønnevik Wroldsen, Armin Nurkanovic, Charles Khazoom and Farbod Farshidian for the many fruitful discussions, insights, contributions and support. 
+Part of this work was developed during my time at [1X Technologies](https://www.1x.tech/). I would like to kindly thank Eric Jang and Bernt Børnich for supporting the open sourcing of this project.
+
+Further I would like to thank Michael Purcell, Jesper Smith, Simon Zimmermann, Joel Filho, Paal Arthur Schjelderup Thorseth, Varit (Ohm) Vichathorn, Sjur Grønnevik Wroldsen, Armin Nurkanovic, Charles Khazoom and Farbod Farshidian for the many fruitful discussions, insights, contributions and support.

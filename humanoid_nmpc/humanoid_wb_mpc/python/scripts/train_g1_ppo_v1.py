@@ -29,6 +29,7 @@ if "MUJOCO_GL" not in os.environ:
 
 import humanoid_wb_mpc.bootstrap  # noqa: F401
 from stable_baselines3 import PPO
+from gymnasium.wrappers import TimeLimit
 from humanoid_wb_mpc.config import (
     DEFAULT_TASK_FILE,
     DEFAULT_URDF_FILE,
@@ -41,19 +42,24 @@ USE_WEIGHT_ENV = True
 
 
 def main():
+    headless = os.environ.get("HEADLESS", "1") == "1"
+
     if USE_WEIGHT_ENV:
-        print("正在初始化 G1 MPC 权重环境（仿真同步多速率）...")
+        print(f"正在初始化 G1 MPC 权重环境（仿真同步多速率）...(headless={headless})")
         env = make_g1_mpc_weight_env(
             task_file=DEFAULT_TASK_FILE,
             urdf_file=DEFAULT_URDF_FILE,
             ref_file=DEFAULT_REF_FILE,
-            headless=True,
+            headless=headless,
             seed=42,
         )
     else:
         from humanoid_wb_mpc.envs import G1MpcEnv
         print("正在初始化 G1 MPC 强化学习环境（简化）...")
         env = G1MpcEnv(DEFAULT_TASK_FILE, DEFAULT_URDF_FILE, DEFAULT_REF_FILE)
+
+    max_episode_steps = 2048
+    env = TimeLimit(env, max_episode_steps=max_episode_steps)
 
     total_steps = int(os.environ.get("TOTAL_TIMESTEPS", 200_000))
     tb_log_dir = os.environ.get("TB_LOG_DIR", "./ppo_g1_logs/phase1_short")

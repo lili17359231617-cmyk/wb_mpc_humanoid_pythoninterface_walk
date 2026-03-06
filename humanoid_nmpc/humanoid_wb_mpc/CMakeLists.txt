@@ -31,6 +31,16 @@ find_package(ocs2_pinocchio_interface REQUIRED)
 find_package(ocs2_centroidal_model REQUIRED)
 find_package(humanoid_common_mpc REQUIRED)
 find_package(robot_model REQUIRED)
+find_package(mujoco_vendor REQUIRED)
+# mujoco_vendor 通过 ament 导出时可能不传递 INTERFACE 库路径，此处用安装路径显式指定 libmujoco
+# mujoco_vendor_DIR = <install_base>/mujoco_vendor/share/mujoco_vendor/cmake -> 向上 3 级得到包前缀
+get_filename_component(_mujoco_vendor_cmake "${mujoco_vendor_DIR}" PATH)
+get_filename_component(_mujoco_vendor_share "${_mujoco_vendor_cmake}" PATH)
+get_filename_component(_mujoco_vendor_prefix "${_mujoco_vendor_share}" PATH)
+set(MUJOCO_LIBRARY "${_mujoco_vendor_prefix}/lib/libmujoco.so")
+if(NOT EXISTS "${MUJOCO_LIBRARY}")
+  set(MUJOCO_LIBRARY "${_mujoco_vendor_prefix}/lib/libmujoco.so.3.3.4")
+endif()
 find_package(mujoco_sim_interface REQUIRED)
 
 find_package(GTest REQUIRED)
@@ -84,6 +94,7 @@ set(dependencies
   ocs2_pinocchio_interface
   humanoid_common_mpc
   robot_model
+  mujoco_vendor
   ocs2_ddp   #加入dependencies列表,方便后续导出
 )
 
@@ -155,7 +166,7 @@ target_link_libraries(humanoid_wb_mpc_py PRIVATE
     ${PROJECT_NAME}             # 链接你自己的 C++ 库
     pybind11::module            # pybind11 必须
     Python3::Python
-    mujoco                      # 外部仿真库
+    ${MUJOCO_LIBRARY}           # mujoco_vendor 安装的 libmujoco.so（显式路径避免 -lmujoco 找不到）
     glfw
     GLEW
     ${Boost_LIBRARIES}

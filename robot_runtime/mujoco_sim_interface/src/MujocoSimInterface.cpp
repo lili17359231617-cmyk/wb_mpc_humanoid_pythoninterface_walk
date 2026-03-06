@@ -371,8 +371,7 @@ void MujocoSimInterface::simulationStep() {
   static int step_count = 0;
   step_count++;
   if (step_count % 1000 == 0) {
-    std::cout << "[同步模式] 执行仿真步: " << step_count 
-              << ", 仿真时间: " << mujocoData_->time << " s" << std::endl;
+    std::cout << "[同步模式] 执行仿真步: " << step_count << ", 仿真时间: " << mujocoData_->time << " s" << std::endl;
   }
 #endif
   threadSafeRobotJointAction_.copy_value(robotJointActionInternal_);
