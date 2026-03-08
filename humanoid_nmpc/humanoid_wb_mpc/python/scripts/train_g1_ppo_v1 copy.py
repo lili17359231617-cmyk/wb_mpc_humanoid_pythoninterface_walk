@@ -20,14 +20,9 @@ G1 MPC 权重 PPO 训练脚本
   - 说明：domain_rand/* 来自环境 reset 时采样的 mu/外力/velocity_command 等；
          仅用于确认随机化是否生效，不改变训练逻辑。
 
-- 并行 env 数量（第一阶段建议 1 / 4 / 8）：
-  - N_ENVS=1             # 单 env（默认）
-  - N_ENVS=4 或 N_ENVS=8 # 多进程并行，每进程一个 G1MpcWeightEnv，各用不同 seed（base_seed + rank）
-  - 多 env 时建议 HEADLESS=1；n_steps 默认取 2048*N_ENVS，保证每 env 每轮约 2048 步
-
 - 修改训练超参（不改代码，直接用环境变量覆盖）：
   - LEARNING_RATE=1e-4
-  - N_STEPS=2048         # 单 env 时；多 env 时默认 2048*N_ENVS，也可手动设
+  - N_STEPS=2048
   - BATCH_SIZE=128
   - N_EPOCHS=10
   - GAMMA=0.99
@@ -40,11 +35,8 @@ G1 MPC 权重 PPO 训练脚本
   # 有头训练 + 写入 domain_rand/* 到 TensorBoard
   LOG_RESET_RAND=1 HEADLESS=0 TOTAL_TIMESTEPS=100000 TB_LOG_DIR=./ppo_g1_logs/phase1_short python3 train_g1_ppo_v1.py
 
-  # 4 个并行 env（无头，推荐先试）
-  N_ENVS=4 HEADLESS=1 TOTAL_TIMESTEPS=200000 python3 train_g1_ppo_v1.py
-
-  # 8 个并行 env + 鲁棒性指标
-  N_ENVS=8 LOG_ROBUST_METRICS=1 TOTAL_TIMESTEPS=200000 python3 train_g1_ppo_v1.py
+  # 无头训练 + 调学习率/rollout 长度
+  HEADLESS=1 LEARNING_RATE=5e-5 N_STEPS=4096 TOTAL_TIMESTEPS=200000 python3 train_g1_ppo_v1.py
 """
 
 import os
@@ -72,7 +64,6 @@ if "MUJOCO_GL" not in os.environ:
 import humanoid_wb_mpc.bootstrap  # noqa: F401
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.vec_env import SubprocVecEnv
 from gymnasium.wrappers import TimeLimit
 from humanoid_wb_mpc.config import (
     DEFAULT_TASK_FILE,
@@ -240,58 +231,33 @@ class RobustnessMetricsCallback(BaseCallback):
         return True
 
 
-def _make_single_env(rank: int, seed: int, headless: bool, max_episode_steps: int):
-    """子进程/单进程内构造单个 env，用于 VecEnv 或单 env。"""
-    def _init():
-        e = make_g1_mpc_weight_env(
+def main():
+    headless = os.environ.get("HEADLESS", "1") == "1"
+    seed = int(os.environ.get("SEED", "42"))
+
+    if USE_WEIGHT_ENV:
+        print(f"正在初始化 G1 MPC 权重环境（仿真同步多速率）...(headless={headless})")
+        env = make_g1_mpc_weight_env(
             task_file=DEFAULT_TASK_FILE,
             urdf_file=DEFAULT_URDF_FILE,
             ref_file=DEFAULT_REF_FILE,
             headless=headless,
-            seed=seed + rank,
+            seed=seed,
         )
-        return TimeLimit(e, max_episode_steps=max_episode_steps)
-    return _init
-
-
-def main():
-    headless = os.environ.get("HEADLESS", "1") == "1"
-    seed = int(os.environ.get("SEED", "42"))
-    n_envs = int(os.environ.get("N_ENVS", "1"))
-    # 仅允许 1 / 4 / 8，其它值按 1 处理
-    if n_envs not in (1, 4, 8):
-        n_envs = 1
-    max_episode_steps = 2048
-
-    if USE_WEIGHT_ENV:
-        if n_envs == 1:
-            print(f"正在初始化 G1 MPC 权重环境（单 env，仿真同步多速率）...(headless={headless})")
-            env = _make_single_env(0, seed, headless, max_episode_steps)()
-        else:
-            if not headless:
-                print("   [提示] N_ENVS>1 时建议 HEADLESS=1，已强制 headless=True 避免多窗口")
-                headless = True
-            print(f"正在初始化 G1 MPC 权重环境（{n_envs} 个并行 env，SubprocVecEnv）...(headless={headless})")
-            env_fns = [_make_single_env(rank, seed, headless, max_episode_steps) for rank in range(n_envs)]
-            env = SubprocVecEnv(env_fns)
     else:
-        n_envs = 1  # 简化 env 仅支持单 env
         from humanoid_wb_mpc.envs import G1MpcEnv
         print("正在初始化 G1 MPC 强化学习环境（简化）...")
         env = G1MpcEnv(DEFAULT_TASK_FILE, DEFAULT_URDF_FILE, DEFAULT_REF_FILE)
-        env = TimeLimit(env, max_episode_steps=max_episode_steps)
+
+    max_episode_steps = 2048
+    env = TimeLimit(env, max_episode_steps=max_episode_steps)
 
     total_steps = int(os.environ.get("TOTAL_TIMESTEPS", 200_000))
     tb_log_dir = os.environ.get("TB_LOG_DIR", "./ppo_g1_logs/phase1_short")
 
     # PPO 超参（可用环境变量覆盖）
     learning_rate = float(os.environ.get("LEARNING_RATE", "1e-4"))
-    n_steps_raw = os.environ.get("N_STEPS", "").strip()
-    if n_steps_raw:
-        n_steps = int(n_steps_raw)
-    else:
-        # 多 env 时默认 n_steps = 2048 * n_envs，使每 env 每轮约 2048 步
-        n_steps = 2048 * max(1, n_envs)
+    n_steps = int(os.environ.get("N_STEPS", "2048"))
     batch_size = int(os.environ.get("BATCH_SIZE", "128"))
     n_epochs = int(os.environ.get("N_EPOCHS", "10"))
     gamma = float(os.environ.get("GAMMA", "0.99"))
@@ -318,8 +284,9 @@ def main():
         seed=seed,
     )
 
-    print("🚀 启动训练: G1 步态残差优化（Phase1）...")
-    print(f"   并行 env: {n_envs} | n_steps: {n_steps} | 总步数: {total_steps:,} | TensorBoard: {tb_log_dir}")
+    # 第一阶段短训练试跑：1e5～2e5 steps（单 env），用于观察 reward / episode length 曲线
+    print("🚀 启动训练: G1 步态残差优化（Phase1 短训练）...")
+    print(f"   总步数: {total_steps:,} | TensorBoard: {tb_log_dir}")
     callback = None
     if os.environ.get("LOG_RESET_RAND", "0") == "1":
         every = int(os.environ.get("LOG_RESET_RAND_EVERY", "20"))
@@ -331,7 +298,7 @@ def main():
         callback = [cb for cb in (callback, robust_cb) if cb is not None]
         print("   鲁棒性指标记录已开启: LOG_ROBUST_METRICS=1")
     model.learn(total_timesteps=total_steps, progress_bar=True, callback=callback)
-    save_name = f"g1_ppo_residual_v1_phase1_{total_steps}" + (f"_n{n_envs}" if n_envs > 1 else "")
+    save_name = f"g1_ppo_residual_v1_phase1_{total_steps}"
     model.save(save_name)
     print(f"✅ 训练模型已保存为 {save_name}.zip")
     tb_abs = os.path.abspath(tb_log_dir)

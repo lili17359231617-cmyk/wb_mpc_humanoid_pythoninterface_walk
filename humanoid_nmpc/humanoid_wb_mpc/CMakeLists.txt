@@ -198,9 +198,10 @@ install(
   DESTINATION include
 )
 
-# 将模块安装到 Python 站点包路径下
+# 将模块安装到 lib/pythonX.Y/site-packages，与 colcon 自动加入的 PYTHONPATH 一致，避免依赖 environment hook
 install(TARGETS humanoid_wb_mpc_py
-  DESTINATION lib
+  LIBRARY DESTINATION lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/site-packages
+  RUNTIME DESTINATION lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/site-packages
 )
 
 # install(TARGETS

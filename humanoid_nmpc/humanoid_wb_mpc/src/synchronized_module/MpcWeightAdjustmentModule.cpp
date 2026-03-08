@@ -39,13 +39,18 @@ void MpcWeightAdjustmentModule::updateWeightsInternal() {
 
     std::lock_guard<std::mutex> lock(residualMutex_);
 
-    // 2. 现在可以合法地访问 costTerm.Q_ 了
-    matrix_t Q = costTerm.Q_;
+    // 2. 首次调用时从 OCP 快照保存基准 Q，后续每次均从基准出发，
+    //    避免 exp(a) 在多步间累乘导致权重无限增长/衰减。
+    if (Q_base_.rows() == 0) {
+      Q_base_ = costTerm.Q_;
+    }
 
-    if (static_cast<Eigen::Index>(currentResidual_.size()) == Q.rows()) {
+    if (static_cast<Eigen::Index>(currentResidual_.size()) == Q_base_.rows()) {
+      matrix_t Q = Q_base_;
       for (int i = 0; i < Q.rows(); ++i) {
-        // 执行残差法映射：Q_i = Q_base_i * exp(a_i)
-        Q(i, i) *= std::exp(currentResidual_[i]);
+        // 映射：Q_i = Q_base_i * (1 + exp(a_i))
+        // 保证 Q_i >= Q_base_i（Q 只增不低于基准），且 Q_base_i=0 的维度保持为 0。
+        Q(i, i) = Q_base_(i, i) * (1.0 + std::exp(currentResidual_[i]));
       }
       // 3. 写回修改后的矩阵
       costTerm.Q_ = Q;

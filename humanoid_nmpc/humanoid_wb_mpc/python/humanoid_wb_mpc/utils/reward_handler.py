@@ -58,14 +58,18 @@ class MpcWeightEnvReward:
         state_dim = obs.size
         if state_dim >= 32:
             vx, vy = float(obs[29]), float(obs[30])
+            vel_cmd = info.get("vel_cmd", None)
+            tvx = float(vel_cmd[0]) if vel_cmd is not None else self.target_vx
+            tvy = float(vel_cmd[1]) if vel_cmd is not None else self.target_vy
             components["velocity"] = (
                 -self.w_velocity
-                * (abs(vx - self.target_vx) + abs(vy - self.target_vy))
+                * (abs(vx - tvx) + abs(vy - tvy))
             )
         else:
             components["velocity"] = 0.0
 
-        roll, pitch = float(obs[3]), float(obs[4])
+        # obs[3]=yaw, obs[4]=pitch, obs[5]=roll（ZYX欧拉角顺序，与 task.info initialState 一致）
+        pitch, roll = float(obs[4]), float(obs[5])
         components["orientation"] = -self.w_orientation * (
             min(abs(roll), self.max_roll_pitch) + min(abs(pitch), self.max_roll_pitch)
         )

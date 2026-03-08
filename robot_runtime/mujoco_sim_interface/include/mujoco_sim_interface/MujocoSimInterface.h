@@ -83,6 +83,15 @@ class MujocoSimInterface : public robot::model::RobotHWInterfaceBase {
   // Todo Manu also reset environment
   void reset();
 
+  /** Sync current robotStateInternal_ to MuJoCo qpos/qvel (e.g. after set_robot_state from Python). */
+  void syncStateToSim();
+
+  /** Schedule an external force pulse on a body (world frame). Applied for the next duration_steps sim steps. */
+  void setPendingForce(const std::string& body_name, double fx, double fy, double fz, int duration_steps);
+
+  /** Set sliding friction coefficient for a geom by name (e.g. "floor"). MuJoCo geom_friction[0]. */
+  void setGeomFriction(const std::string& geom_name, double mu);
+
   // Allows the renderer to make a thread safe copy of the state at it's own frequency.
   void copyMjState(MjState& state) const;
 
@@ -154,6 +163,11 @@ class MujocoSimInterface : public robot::model::RobotHWInterfaceBase {
 
   size_t right_foot_touch_sensor_addr_;
   size_t left_foot_touch_sensor_addr_;
+
+  // Optional external force pulse (for domain randomization)
+  int pending_force_body_id_ = -1;
+  double pending_force_[3] = {0, 0, 0};
+  int pending_force_duration_ = 0;
 };
 
 }  // namespace robot::mujoco_sim_interface

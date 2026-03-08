@@ -69,9 +69,12 @@ class G1MpcWeightEnv(gym.Env):
         velocity_command: Optional[np.ndarray] = None,
         reward_fn: Optional[MpcWeightEnvReward] = None,
         seed: Optional[int] = None,
+        enable_reset_randomization: bool = True,
     ):
         super().__init__()
         mpc_py = _get_mpc_py()
+        self._enable_reset_randomization = enable_reset_randomization
+        self._reset_rand_info: Dict[str, Any] = {}
 
         self._rl_frequency_hz = rl_frequency_hz
         self._mpc_frequency_hz = mpc_frequency_hz
@@ -107,6 +110,7 @@ class G1MpcWeightEnv(gym.Env):
             initial_base_height, self._velocity_command[3]
         ])
         self._proc_mgr.set_velocity_command(cmd)
+        self._current_vel_cmd = cmd.copy()
 
         model_settings = self._interface.get_model_settings()
         mpc_joint_dim = model_settings.mpc_joint_dim
@@ -165,12 +169,26 @@ class G1MpcWeightEnv(gym.Env):
         if seed is not None:
             np.random.seed(seed)
         options = options or {}
-        init_mpc_state = self._interface.get_initial_state()
+        init_mpc_state = np.array(self._interface.get_initial_state(), dtype=float)
         model_settings = self._interface.get_model_settings()
         mpc_joint_dim = model_settings.mpc_joint_dim
-        base_pos = init_mpc_state[:3]
-        base_euler = init_mpc_state[3:6]
-        mpc_joint_angles = init_mpc_state[6 : 6 + mpc_joint_dim]
+        base_pos = np.array(init_mpc_state[:3], dtype=float)
+        base_euler = np.array(init_mpc_state[3:6], dtype=float)
+        mpc_joint_angles = np.array(init_mpc_state[6 : 6 + mpc_joint_dim], dtype=float)
+
+        rand_mu: Optional[float] = None
+        rand_force: Optional[Dict[str, float]] = None
+
+        if self._enable_reset_randomization:
+            # 初始高度/位置小范围随机
+            base_pos[0] += float(np.random.uniform(-0.012, 0.012))
+            base_pos[1] += float(np.random.uniform(-0.012, 0.012))
+            base_pos[2] += float(np.random.uniform(-0.02, 0.02))
+            # 初始姿态（欧拉角）小范围随机
+            base_euler += np.random.uniform(-0.02, 0.02, size=3).astype(np.float64)
+            # 关节角小范围随机
+            mpc_joint_angles += np.random.uniform(-0.012, 0.012, size=mpc_joint_angles.size).astype(np.float64)
+
         quat_xyzw = R.from_euler("zyx", base_euler, degrees=False).as_quat()
         quat_wxyz = np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
         robot_description = _get_mpc_py().RobotDescription(self._urdf_file)
@@ -193,12 +211,43 @@ class G1MpcWeightEnv(gym.Env):
             self._sim.reset()
 
         self._interface.reset()
-        self._proc_mgr.set_velocity_command(
-            np.array([
-                self._velocity_command[0], self._velocity_command[1],
-                float(base_pos[2]), self._velocity_command[3]
-            ])
-        )
+        # 本 episode 使用的速度指令（可随机化）
+        vel_cmd = np.array([
+            self._velocity_command[0], self._velocity_command[1],
+            float(base_pos[2]), self._velocity_command[3]
+        ], dtype=float)
+        if self._enable_reset_randomization:
+            vel_cmd[0] += float(np.random.uniform(-0.05, 0.05))   # vx
+            vel_cmd[1] += float(np.random.uniform(-0.05, 0.05))   # vy
+            vel_cmd[3] += float(np.random.uniform(-0.04, 0.04))   # yaw rate
+        self._proc_mgr.set_velocity_command(vel_cmd)
+        self._current_vel_cmd = vel_cmd.copy()
+
+        # 地面摩擦系数小范围随机
+        if self._enable_reset_randomization:
+            rand_mu = float(np.random.uniform(0.65, 1.08))
+            self._sim.set_geom_friction("floor", rand_mu)
+            # 以一定概率施加短脉冲外力（世界系，作用在 pelvis）
+            if np.random.uniform(0, 1) < 0.45:
+                angle = np.random.uniform(0, 2 * np.pi)
+                mag = float(np.random.uniform(28, 62))
+                fx = mag * np.cos(angle)
+                fy = mag * np.sin(angle)
+                fz = float(np.random.uniform(-8, 12))
+                duration_steps = int(np.random.uniform(12, 22))
+                self._sim.set_pending_force("pelvis", fx, fy, fz, duration_steps)
+                rand_force = {"fx": float(fx), "fy": float(fy), "fz": float(fz), "duration_steps": float(duration_steps)}
+
+        # 给训练/调试暴露 reset 随机化采样结果：在 reset info + episode 第 1 步 info 里都能看到
+        self._reset_rand_info = {
+            "reset_rand/enabled": bool(self._enable_reset_randomization),
+            "reset_rand/base_pos": base_pos.astype(np.float32),
+            "reset_rand/base_euler": base_euler.astype(np.float32),
+            "reset_rand/vel_cmd": vel_cmd.astype(np.float32),
+            "reset_rand/mu": rand_mu,
+            "reset_rand/force": rand_force,
+        }
+
         self._prev_action = None
         self._sim_time = 0.0
         self._step_count = 0
@@ -206,7 +255,7 @@ class G1MpcWeightEnv(gym.Env):
         self._sim.update_interface_state_from_robot()
         robot_state = self._sim.get_robot_state()
         obs = robot_state_to_observation(self._controller, robot_state)
-        info = {"sim_time": self._sim_time, "step": self._step_count}
+        info = {"sim_time": self._sim_time, "step": self._step_count, **self._reset_rand_info}
         return obs, info
 
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
@@ -236,15 +285,28 @@ class G1MpcWeightEnv(gym.Env):
         next_robot_state = self._sim.get_robot_state()
         next_obs = robot_state_to_observation(self._controller, next_robot_state)
 
-        height = next_robot_state.get_root_position()[2]
+        root_pos = np.array(next_robot_state.get_root_position(), dtype=np.float64)
+        height = float(root_pos[2])
+        root_quat_wxyz = np.array(next_robot_state.get_root_rotation_quat(), dtype=np.float64)  # [w,x,y,z]
+        quat_xyzw = np.array([root_quat_wxyz[1], root_quat_wxyz[2], root_quat_wxyz[3], root_quat_wxyz[0]], dtype=np.float64)
+        root_euler_zyx = R.from_quat(quat_xyzw).as_euler("zyx", degrees=False).astype(np.float64)
+        root_lin_vel_local = np.array(next_robot_state.get_root_linear_velocity(), dtype=np.float64)
+        root_ang_vel_local = np.array(next_robot_state.get_root_angular_velocity(), dtype=np.float64)
         terminated = height < self._reward_fn.fall_height_threshold
         truncated = False
         info = {
             "sim_time": self._sim_time,
             "step": self._step_count,
             "height": height,
+            "vel_cmd": self._current_vel_cmd,
+            "root_pos": root_pos.astype(np.float32),
+            "root_euler_zyx": root_euler_zyx.astype(np.float32),
+            "root_lin_vel_local": root_lin_vel_local.astype(np.float32),
+            "root_ang_vel_local": root_ang_vel_local.astype(np.float32),
             "fallen": terminated,
         }
+        if self._step_count == 1 and self._reset_rand_info:
+            info.update(self._reset_rand_info)
 
         reward, reward_components = self._reward_fn.compute(next_obs, action, self._prev_action, info)
         info["reward_components"] = reward_components
@@ -270,6 +332,7 @@ def make_g1_mpc_weight_env(
     velocity_command: Optional[np.ndarray] = None,
     reward_fn: Optional[MpcWeightEnvReward] = None,
     seed: Optional[int] = None,
+    enable_reset_randomization: bool = True,
 ) -> G1MpcWeightEnv:
     """构造 G1 MPC 权重调节 RL 环境。多速率默认 RL(50Hz) : MPC(100Hz) : Sim(1000Hz)。"""
     return G1MpcWeightEnv(
@@ -285,4 +348,5 @@ def make_g1_mpc_weight_env(
         velocity_command=velocity_command,
         reward_fn=reward_fn,
         seed=seed,
+        enable_reset_randomization=enable_reset_randomization,
     )

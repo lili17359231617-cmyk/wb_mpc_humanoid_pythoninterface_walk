@@ -155,6 +155,27 @@ void MujocoSimInterface::reset() {
   memcpy(mujocoData_->qvel, qvel_init_, mujocoModel_->nv * sizeof(mjtNum));
 }
 
+void MujocoSimInterface::syncStateToSim() {
+  std::lock_guard<std::mutex> guard(mujocoMutex_);
+  setSimState(robotStateInternal_);
+}
+
+void MujocoSimInterface::setPendingForce(const std::string& body_name, double fx, double fy, double fz, int duration_steps) {
+  const int body_id = mj_name2id(mujocoModel_, mjOBJ_BODY, body_name.c_str());
+  if (body_id < 0) return;
+  pending_force_body_id_ = body_id;
+  pending_force_[0] = fx;
+  pending_force_[1] = fy;
+  pending_force_[2] = fz;
+  pending_force_duration_ = duration_steps > 0 ? duration_steps : 0;
+}
+
+void MujocoSimInterface::setGeomFriction(const std::string& geom_name, double mu) {
+  const int geom_id = mj_name2id(mujocoModel_, mjOBJ_GEOM, geom_name.c_str());
+  if (geom_id < 0 || geom_id >= mujocoModel_->ngeom) return;
+  mujocoModel_->geom_friction[geom_id * 3] = static_cast<mjtNum>(mu);
+}
+
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
@@ -383,6 +404,14 @@ void MujocoSimInterface::simulationStep() {
   }
 
   mujocoMutex_.lock();
+  // Clear applied forces and apply pending force pulse (domain randomization)
+  std::memset(mujocoData_->xfrc_applied, 0, mujocoModel_->nbody * 6 * sizeof(mjtNum));
+  if (pending_force_duration_ > 0 && pending_force_body_id_ >= 0 && pending_force_body_id_ < mujocoModel_->nbody) {
+    mujocoData_->xfrc_applied[pending_force_body_id_ * 6 + 0] += pending_force_[0];
+    mujocoData_->xfrc_applied[pending_force_body_id_ * 6 + 1] += pending_force_[1];
+    mujocoData_->xfrc_applied[pending_force_body_id_ * 6 + 2] += pending_force_[2];
+    pending_force_duration_--;
+  }
   mj_step(mujocoModel_, mujocoData_);
   updateThreadSafeRobotState();
   updateMetrics();

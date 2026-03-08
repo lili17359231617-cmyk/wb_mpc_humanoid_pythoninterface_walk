@@ -42,6 +42,7 @@
 - **日志**：TensorBoard 写入 `TB_LOG_DIR`（默认 `./ppo_g1_logs/phase1_short`）；查看曲线建议用绝对路径或先 `cd` 到脚本目录。
 - **从头训练**：`TOTAL_TIMESTEPS` 表示「总训练步数」；保存名为 `g1_ppo_residual_v1_phase1_{TOTAL_TIMESTEPS}.zip`。
 - **从 checkpoint 续训**：设置 `RESUME_FROM` 为已有 `.zip` 路径，`TOTAL_TIMESTEPS` 表示「追加步数」，时间轴不重置；保存名为 `{原模型名}_plus_{追加步数}.zip`。
+- **reset 随机化（站立鲁棒性）**：`G1MpcWeightEnv` 在 `reset` 中可选对「初始高度/姿态、velocity_command、短脉冲外力、地面摩擦系数」做小范围随机（默认开启）。构造环境时 `enable_reset_randomization=True`（默认）；设为 `False` 可关闭随机化，便于复现或调试。
 
 ### 2.1 从 20 万步 checkpoint 再训 2 万步（续训命令）
 
@@ -54,6 +55,8 @@ TOTAL_TIMESTEPS=20000 \
 RESUME_FROM=g1_ppo_residual_v1_phase1_200000.zip \
 python3 train_g1_ppo_v1.py
 ```
+### 2.2 tensorboard 曲线显示命令：
+tensorboard --logdir /wb_humanoid_mpc_ws/src/wb_humanoid_mpc/humanoid_nmpc/humanoid_wb_mpc/python/scripts/ppo_g1_logs/phase1_short
 
 - 若模型在其他路径，将 `RESUME_FROM` 改为该 `.zip` 的绝对或相对路径即可。
 - 续训完成后新模型保存为：`g1_ppo_residual_v1_phase1_200000_plus_20000.zip`。
