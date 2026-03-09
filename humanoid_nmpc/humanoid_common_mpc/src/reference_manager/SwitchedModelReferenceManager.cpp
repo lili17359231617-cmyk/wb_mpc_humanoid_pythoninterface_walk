@@ -60,7 +60,19 @@ contact_flag_t SwitchedModelReferenceManager::getContactFlags(scalar_t time) con
 /******************************************************************************************************/
 
 scalar_t SwitchedModelReferenceManager::getPhaseVariable(scalar_t time) const {
-  const auto it = std::upper_bound(modeSchedule_.eventTimes.begin(), modeSchedule_.eventTimes.end(), time);
+  const auto& eventTimes = modeSchedule_.eventTimes;
+
+  // Guard: empty schedule or time outside event range — return stance default
+  if (eventTimes.empty()) {
+    return 0.0;
+  }
+
+  const auto it = std::upper_bound(eventTimes.begin(), eventTimes.end(), time);
+
+  if (it == eventTimes.begin() || it == eventTimes.end()) {
+    return 0.0;
+  }
+
   scalar_t nextEventTime = *it;
   scalar_t prevEventTime = *(it - 1);
 

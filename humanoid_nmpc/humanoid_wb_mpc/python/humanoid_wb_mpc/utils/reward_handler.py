@@ -25,8 +25,11 @@ class MpcWeightEnvReward:
         w_orientation: float = 0.5,
         w_action_magnitude: float = 0.01,
         w_action_smooth: float = 0.02,
-        fall_height_threshold: float = 0.35,
+        w_survival: float = 0.1,
+        fall_height_threshold: float = 0.6,
+        fall_penalty: float = -2.0,
         max_roll_pitch: float = 0.5,
+        w_gait_symmetry: float = 0.0,
     ):
         self.target_height = target_height
         self.target_vx = target_vx
@@ -37,8 +40,11 @@ class MpcWeightEnvReward:
         self.w_orientation = w_orientation
         self.w_action_magnitude = w_action_magnitude
         self.w_action_smooth = w_action_smooth
+        self.w_survival = w_survival
         self.fall_height_threshold = fall_height_threshold
+        self.fall_penalty = fall_penalty
         self.max_roll_pitch = max_roll_pitch
+        self.w_gait_symmetry = w_gait_symmetry
 
     def compute(
         self,
@@ -73,6 +79,7 @@ class MpcWeightEnvReward:
         components["orientation"] = -self.w_orientation * (
             min(abs(roll), self.max_roll_pitch) + min(abs(pitch), self.max_roll_pitch)
         )
+        components["survival"] = self.w_survival
         components["action_magnitude"] = -self.w_action_magnitude * float(np.sum(np.square(action)))
         if prev_action is not None and prev_action.size == action.size:
             components["action_smooth"] = -self.w_action_smooth * float(np.sum(np.square(action - prev_action)))
@@ -80,9 +87,21 @@ class MpcWeightEnvReward:
             components["action_smooth"] = 0.0
 
         if height < self.fall_height_threshold:
-            components["fall"] = -10.0
+            components["fall"] = self.fall_penalty
         else:
             components["fall"] = 0.0
+
+        # 步态对称性奖励（Phase 2 启用）
+        # 关节顺序（obs[6:12]=左腿, obs[12:18]=右腿）：
+        #   hip_pitch(同号), hip_roll(异号), hip_yaw(异号), knee(同号), ankle_pitch(同号), ankle_roll(异号)
+        if self.w_gait_symmetry > 0.0 and obs.size >= 18:
+            sym_signs = np.array([1.0, -1.0, -1.0, 1.0, 1.0, -1.0], dtype=np.float64)
+            left_leg = obs[6:12].astype(np.float64)
+            right_leg = obs[12:18].astype(np.float64)
+            symmetry_err = float(np.sum(np.abs(left_leg - sym_signs * right_leg)))
+            components["gait_symmetry"] = -self.w_gait_symmetry * symmetry_err
+        else:
+            components["gait_symmetry"] = 0.0
 
         total = sum(components.values())
         return total, components

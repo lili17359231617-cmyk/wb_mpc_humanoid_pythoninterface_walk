@@ -6,10 +6,11 @@ G1 人形机器人「RL 调节 MPC 权重」训练环境
 - 多速率默认 RL(50Hz) : MPC(100Hz) : Sim(1000Hz)。
 """
 
+import os
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Dict, Any, List
 from scipy.spatial.transform import Rotation as R
 
 # 使用包内 bootstrap 与配置（在创建环境前需已 import humanoid_wb_mpc.bootstrap）
@@ -70,11 +71,26 @@ class G1MpcWeightEnv(gym.Env):
         reward_fn: Optional[MpcWeightEnvReward] = None,
         seed: Optional[int] = None,
         enable_reset_randomization: bool = True,
+        active_weight_dims: Optional[List[int]] = None,
+        force_prob: float = 0.45,
+        force_mag_range: Tuple[float, float] = (28.0, 62.0),
+        vel_cmd_rand_range: Tuple[float, float, float] = (0.05, 0.05, 0.04),
     ):
         super().__init__()
         mpc_py = _get_mpc_py()
         self._enable_reset_randomization = enable_reset_randomization
         self._reset_rand_info: Dict[str, Any] = {}
+
+        # 动作掩码：只对 active_weight_dims 中的维度应用 RL 输出的残差权重
+        self._active_mask = np.ones(RESIDUAL_WEIGHT_DIM, dtype=bool)
+        if active_weight_dims is not None:
+            self._active_mask[:] = False
+            for i in active_weight_dims:
+                if 0 <= i < RESIDUAL_WEIGHT_DIM:
+                    self._active_mask[i] = True
+        self._force_prob = float(force_prob)
+        self._force_mag_range = (float(force_mag_range[0]), float(force_mag_range[1]))
+        self._vel_cmd_rand_range = (float(vel_cmd_rand_range[0]), float(vel_cmd_rand_range[1]), float(vel_cmd_rand_range[2]))
 
         self._rl_frequency_hz = rl_frequency_hz
         self._mpc_frequency_hz = mpc_frequency_hz
@@ -101,6 +117,7 @@ class G1MpcWeightEnv(gym.Env):
         self._interface.setup_mpc()
         self._state_dim = self._interface.get_state_dim()
         self._weight_module = self._interface.get_weight_adjustment_module()
+        self._ref_manager = self._interface.get_switched_model_reference_manager_ptr()
 
         self._proc_mgr = mpc_py.ProceduralMpcMotionManager(gait_file, ref_file, self._interface)
         init_mpc_state = np.array(self._interface.get_initial_state(), dtype=float)
@@ -148,10 +165,11 @@ class G1MpcWeightEnv(gym.Env):
         self._controller = mpc_py.WBMpcMrtJointController(self._interface, mpc_frequency_hz)
         self._joint_actions = self._sim.get_robot_joint_action()
 
-        self._obs_dim = get_observation_dim(self._interface)
+        # 58 (MPC状态) + 2 (接触标志) + 1 (步态相位) + 58 (上一步action) = 119
+        self._obs_dim = get_observation_dim(self._interface) + 2 + 1 + RESIDUAL_WEIGHT_DIM
         self._action_clipper = MpcResidualActionSpace()
         self.action_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(RESIDUAL_WEIGHT_DIM,), dtype=np.float32
+            low=-0.4, high=0.4, shape=(RESIDUAL_WEIGHT_DIM,), dtype=np.float32
         )
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(self._obs_dim,), dtype=np.float32
@@ -211,15 +229,16 @@ class G1MpcWeightEnv(gym.Env):
             self._sim.reset()
 
         self._interface.reset()
+        self._ref_manager = self._interface.get_switched_model_reference_manager_ptr()
         # 本 episode 使用的速度指令（可随机化）
         vel_cmd = np.array([
             self._velocity_command[0], self._velocity_command[1],
             float(base_pos[2]), self._velocity_command[3]
         ], dtype=float)
         if self._enable_reset_randomization:
-            vel_cmd[0] += float(np.random.uniform(-0.05, 0.05))   # vx
-            vel_cmd[1] += float(np.random.uniform(-0.05, 0.05))   # vy
-            vel_cmd[3] += float(np.random.uniform(-0.04, 0.04))   # yaw rate
+            vel_cmd[0] += float(np.random.uniform(-self._vel_cmd_rand_range[0], self._vel_cmd_rand_range[0]))  # vx
+            vel_cmd[1] += float(np.random.uniform(-self._vel_cmd_rand_range[1], self._vel_cmd_rand_range[1]))  # vy
+            vel_cmd[3] += float(np.random.uniform(-self._vel_cmd_rand_range[2], self._vel_cmd_rand_range[2]))  # yaw rate
         self._proc_mgr.set_velocity_command(vel_cmd)
         self._current_vel_cmd = vel_cmd.copy()
 
@@ -228,9 +247,9 @@ class G1MpcWeightEnv(gym.Env):
             rand_mu = float(np.random.uniform(0.65, 1.08))
             self._sim.set_geom_friction("floor", rand_mu)
             # 以一定概率施加短脉冲外力（世界系，作用在 pelvis）
-            if np.random.uniform(0, 1) < 0.45:
+            if np.random.uniform(0, 1) < self._force_prob:
                 angle = np.random.uniform(0, 2 * np.pi)
-                mag = float(np.random.uniform(28, 62))
+                mag = float(np.random.uniform(self._force_mag_range[0], self._force_mag_range[1]))
                 fx = mag * np.cos(angle)
                 fy = mag * np.sin(angle)
                 fz = float(np.random.uniform(-8, 12))
@@ -252,31 +271,67 @@ class G1MpcWeightEnv(gym.Env):
         self._sim_time = 0.0
         self._step_count = 0
 
+        _dbg = os.environ.get("DEBUG_ENV", "0") == "1"
+        if _dbg:
+            print("[DEBUG_ENV] reset: before update_interface_state_from_robot", flush=True)
         self._sim.update_interface_state_from_robot()
+        if _dbg:
+            print("[DEBUG_ENV] reset: before get_robot_state", flush=True)
         robot_state = self._sim.get_robot_state()
+        if _dbg:
+            print("[DEBUG_ENV] reset: before robot_state_to_observation", flush=True)
         obs = robot_state_to_observation(self._controller, robot_state)
+        if _dbg:
+            print("[DEBUG_ENV] reset: before get_contact_flags", flush=True)
+        contact_aug = np.array(self._ref_manager.get_contact_flags(self._sim_time), dtype=np.float32)
+        phase_aug = np.array([self._ref_manager.get_phase_variable(self._sim_time)], dtype=np.float32)
+        prev_act_aug = np.zeros(RESIDUAL_WEIGHT_DIM, dtype=np.float32)
+        obs = np.concatenate([obs, contact_aug, phase_aug, prev_act_aug])
         info = {"sim_time": self._sim_time, "step": self._step_count, **self._reset_rand_info}
+        if _dbg:
+            print("[DEBUG_ENV] reset: done", flush=True)
         return obs, info
 
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
+        _dbg = os.environ.get("DEBUG_ENV", "0") == "1"
+        if _dbg and self._step_count == 0:
+            print("[DEBUG_ENV] step(0): start", flush=True)
         action = np.asarray(action, dtype=np.float64)
         if action.size != RESIDUAL_WEIGHT_DIM:
             action = np.resize(action, RESIDUAL_WEIGHT_DIM)
         action = self._action_clipper.clip(action)
 
-        self._weight_module.set_residual_weights(action.tolist())
+        masked_action = action.copy()
+        masked_action[~self._active_mask] = 0.0
+        self._weight_module.set_residual_weights(masked_action.tolist())
 
-        for _ in range(self._mpc_steps_per_rl):
+        mpc_crashed = False
+        for i in range(self._mpc_steps_per_rl):
+            if _dbg and self._step_count == 0 and i == 0:
+                print("[DEBUG_ENV] step(0): mpc_loop update_interface", flush=True)
             self._sim.update_interface_state_from_robot()
             robot_state = self._sim.get_robot_state()
-            self._controller.compute_joint_control_action_sync(
-                robot_state.get_time(),
-                robot_state,
-                self._joint_actions,
-            )
+            if _dbg and self._step_count == 0 and i == 0:
+                print("[DEBUG_ENV] step(0): mpc_loop compute_joint_control_action_sync", flush=True)
+            try:
+                self._controller.compute_joint_control_action_sync(
+                    robot_state.get_time(),
+                    robot_state,
+                    self._joint_actions,
+                )
+            except RuntimeError as e:
+                if "MPC has crashed" in str(e):
+                    mpc_crashed = True
+                    break
+                raise
             for _ in range(self._sim_steps_per_mpc):
                 self._sim.apply_joint_action()
                 self._sim.simulation_step()
+        if mpc_crashed:
+            obs = self._last_obs if hasattr(self, "_last_obs") else np.zeros(self.observation_space.shape, dtype=np.float32)
+            return obs, -10.0, True, False, {"mpc_crashed": True}
+        if _dbg and self._step_count == 0:
+            print("[DEBUG_ENV] step(0): mpc_loop done, before next_obs", flush=True)
 
         self._sim_time = self._sim_time + self._rl_dt
         self._step_count += 1
@@ -284,6 +339,14 @@ class G1MpcWeightEnv(gym.Env):
         self._sim.update_interface_state_from_robot()
         next_robot_state = self._sim.get_robot_state()
         next_obs = robot_state_to_observation(self._controller, next_robot_state)
+        contact_aug = np.array(self._ref_manager.get_contact_flags(self._sim_time), dtype=np.float32)
+        phase_aug = np.array([self._ref_manager.get_phase_variable(self._sim_time)], dtype=np.float32)
+        prev_act_aug = (
+            self._prev_action.astype(np.float32)
+            if self._prev_action is not None
+            else np.zeros(RESIDUAL_WEIGHT_DIM, dtype=np.float32)
+        )
+        next_obs = np.concatenate([next_obs, contact_aug, phase_aug, prev_act_aug])
 
         root_pos = np.array(next_robot_state.get_root_position(), dtype=np.float64)
         height = float(root_pos[2])
@@ -311,6 +374,7 @@ class G1MpcWeightEnv(gym.Env):
         reward, reward_components = self._reward_fn.compute(next_obs, action, self._prev_action, info)
         info["reward_components"] = reward_components
         self._prev_action = action.copy()
+        self._last_obs = next_obs
 
         return next_obs, float(reward), terminated, truncated, info
 
@@ -333,6 +397,10 @@ def make_g1_mpc_weight_env(
     reward_fn: Optional[MpcWeightEnvReward] = None,
     seed: Optional[int] = None,
     enable_reset_randomization: bool = True,
+    active_weight_dims: Optional[List[int]] = None,
+    force_prob: float = 0.45,
+    force_mag_range: Tuple[float, float] = (28.0, 62.0),
+    vel_cmd_rand_range: Tuple[float, float, float] = (0.05, 0.05, 0.04),
 ) -> G1MpcWeightEnv:
     """构造 G1 MPC 权重调节 RL 环境。多速率默认 RL(50Hz) : MPC(100Hz) : Sim(1000Hz)。"""
     return G1MpcWeightEnv(
@@ -349,4 +417,8 @@ def make_g1_mpc_weight_env(
         reward_fn=reward_fn,
         seed=seed,
         enable_reset_randomization=enable_reset_randomization,
+        active_weight_dims=active_weight_dims,
+        force_prob=force_prob,
+        force_mag_range=force_mag_range,
+        vel_cmd_rand_range=vel_cmd_rand_range,
     )

@@ -49,6 +49,7 @@ install/
 **/__pycache__/**
 
 # MuJoCo log
+MUJOCO_LOG.TXT
 */MUJOCO_LOG.TXT
 *mjData.bin
 
@@ -68,3 +69,6 @@ humanoid_nmpc/humanoid_wb_mpc/**/cppad_generated/
 # Training logs (TensorBoard etc.)
 humanoid_nmpc/humanoid_wb_mpc/python/scripts/ppo_g1_logs/
 **/*.tfevents.*
+
+# PPO policy zip archives (not tracked)
+humanoid_nmpc/humanoid_wb_mpc/python/scripts/ppo_zip/

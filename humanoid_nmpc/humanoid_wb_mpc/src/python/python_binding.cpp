@@ -197,7 +197,16 @@ PYBIND11_MODULE(humanoid_wb_mpc_py, m) {
       // 接触标志
       .def("get_contact_flag", &RobotState::getContactFlag, py::arg("index"), "获取末端执行器的接触标志")
       .def("set_contact_flag", &RobotState::setContactFlag, py::arg("index"), py::arg("contact_flag"), "设置末端执行器的接触标志")
-      .def("get_contact_flags", &RobotState::getContactFlags, "获取所有接触标志 (布尔值列表)")
+      .def(
+          "get_contact_flags",
+          [](const RobotState& self) {
+            const auto flags = self.getContactFlags();
+            std::vector<int> out;
+            out.reserve(flags.size());
+            for (bool b : flags) out.push_back(b ? 1 : 0);
+            return out;
+          },
+          "获取所有接触标志 (0/1 列表)")
 
       // 时间
       .def("get_time", &RobotState::getTime)
@@ -327,9 +336,12 @@ mode_sequence   : [m0, m1, ..., m_{N-1}]，在 [ti, t_{i+1}] 区间内使用模�
           "get_contact_flags",
           [](const SwitchedModelReferenceManager& self, ocs2::scalar_t time) {
             const auto flags = self.getContactFlags(time);
-            return std::vector<bool>(flags.begin(), flags.end());
+            std::vector<int> out;
+            out.reserve(flags.size());
+            for (bool b : flags) out.push_back(b ? 1 : 0);
+            return out;
           },
-          py::arg("time"), "返回当前时刻各脚的接触标志 [左脚, 右脚]，True 表示着地")
+          py::arg("time"), "返回当前时刻各脚的接触标志 [左脚, 右脚]，1 表示着地、0 表示摆动")
       .def("is_in_stance_phase", &SwitchedModelReferenceManager::isInStancePhase, py::arg("time"), "当前时刻是否处于双足支撑相")
       .def("is_in_contact", &SwitchedModelReferenceManager::isInContact, py::arg("time"), py::arg("contact_index"),
            "指定脚在当前时刻是否着地 (contact_index: 0=左, 1=右)")

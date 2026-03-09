@@ -40,27 +40,48 @@ from humanoid_wb_mpc import make_g1_mpc_weight_env
 
 
 def main():
+    model_path = os.environ.get("MODEL", "").strip()
+    use_policy = model_path and os.path.isfile(model_path)
+
     print("=" * 60)
     print("G1 RL 调节 MPC 权重 — 仿真同步多速率环境测试")
     print("=" * 60)
+    if use_policy:
+        print(f"加载策略: {model_path}（复现/回放）")
+    else:
+        print("随机策略测试（未设置 MODEL 或文件不存在）")
 
     headless = os.environ.get("HEADLESS", "1") == "1"
     env = make_g1_mpc_weight_env(headless=headless, seed=42)
     obs, info = env.reset(seed=42)
-    print(f"观测维度: {obs.shape}, 动作维度: {env.action_space.dim}")
+    print(f"观测维度: {obs.shape}, 动作空间: {env.action_space}")
+
+    if use_policy:
+        from stable_baselines3 import PPO
+        model = PPO.load(model_path, env=env)
+        max_steps = int(os.environ.get("EVAL_STEPS", "2048"))
+        deterministic = os.environ.get("DETERMINISTIC", "1") == "1"
+    else:
+        model = None
+        max_steps = 200
 
     total_reward = 0.0
-    max_steps = 200
     t = 0
     for t in range(max_steps):
-        action = env.action_space.sample()
+        if model is not None:
+            action, _ = model.predict(obs, deterministic=deterministic)
+        else:
+            action = env.action_space.sample()
         obs, reward, terminated, truncated, info = env.step(action)
         total_reward += reward
         if (t + 1) % 50 == 0:
             print(f"  step {t+1}  height={info.get('height', 0):.3f}  reward={reward:.4f}  total={total_reward:.2f}")
         if terminated or truncated:
             print(f"  终止 @ step {t+1} (terminated={terminated}, truncated={truncated})")
-            break
+            if use_policy:
+                obs, info = env.reset()
+            else:
+                break
 
     print("-" * 60)
     print(f"总步数: {min(max_steps, t+1)}, 总奖励: {total_reward:.2f}")
