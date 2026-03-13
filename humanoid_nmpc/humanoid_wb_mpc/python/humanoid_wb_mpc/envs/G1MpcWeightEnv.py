@@ -169,7 +169,7 @@ class G1MpcWeightEnv(gym.Env):
         self._obs_dim = get_observation_dim(self._interface) + 2 + 1 + RESIDUAL_WEIGHT_DIM
         self._action_clipper = MpcResidualActionSpace()
         self.action_space = spaces.Box(
-            low=-0.4, high=0.4, shape=(RESIDUAL_WEIGHT_DIM,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(RESIDUAL_WEIGHT_DIM,), dtype=np.float32
         )
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(self._obs_dim,), dtype=np.float32

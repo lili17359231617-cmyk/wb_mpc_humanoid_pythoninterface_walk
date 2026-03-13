@@ -1,6 +1,7 @@
 #include "humanoid_wb_mpc/synchronized_module/MpcWeightAdjustmentModule.h"
 #include <humanoid_common_mpc/cost/StateInputQuadraticCost.h>
 #include "humanoid_wb_mpc/WBMpcInterface.h"  // 确保能看到 Interface 的完整定义
+#include <cmath>
 
 namespace ocs2::humanoid {
 
@@ -46,11 +47,24 @@ void MpcWeightAdjustmentModule::updateWeightsInternal() {
     }
 
     if (static_cast<Eigen::Index>(currentResidual_.size()) == Q_base_.rows()) {
+      constexpr scalar_t kZeroWeightEps = 1e-9;
+      constexpr scalar_t kZeroWeightAlpha = 1.0;  // Softplus 映射的缩放系数 α
+      constexpr scalar_t kZeroWeightBias = 0.0;   // Softplus 映射的偏置 b
+
       matrix_t Q = Q_base_;
       for (int i = 0; i < Q.rows(); ++i) {
-        // 映射：Q_i = Q_base_i * (1 + exp(a_i))
-        // 保证 Q_i >= Q_base_i（Q 只增不低于基准），且 Q_base_i=0 的维度保持为 0。
-        Q(i, i) = Q_base_(i, i) * (1.0 + std::exp(currentResidual_[i]));
+        const scalar_t qBase = Q_base_(i, i);
+        const scalar_t a = static_cast<scalar_t>(currentResidual_[i]);
+
+        if (std::fabs(qBase) < kZeroWeightEps) {
+          // 初始权重为 0：使用 Softplus 映射
+          // Q_new = α * ln(1 + exp(a + b))
+          Q(i, i) = kZeroWeightAlpha * std::log1p(std::exp(a + kZeroWeightBias));
+        } else {
+          // 初始权重非 0：采用指数残差
+          // Q_new = Q_base * exp(a)
+          Q(i, i) = qBase * std::exp(a);
+        }
       }
       // 3. 写回修改后的矩阵
       costTerm.Q_ = Q;

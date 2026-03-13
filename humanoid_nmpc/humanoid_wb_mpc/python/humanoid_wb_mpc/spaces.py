@@ -14,7 +14,7 @@ class MpcResidualActionSpace:
     在 C++ 侧映射为 Q_i = Q_base_i * exp(a_i)，故 a 通常取较小范围（如 [-1, 1]）即可。
     """
 
-    def __init__(self, dim: int = None, low: float = -0.4, high: float = 0.4):
+    def __init__(self, dim: int = None, low: float = -1.0, high: float = 1.0):
         self.dim = dim if dim is not None else RESIDUAL_WEIGHT_DIM
         self.low = np.full(self.dim, low, dtype=np.float32)
         self.high = np.full(self.dim, high, dtype=np.float32)
