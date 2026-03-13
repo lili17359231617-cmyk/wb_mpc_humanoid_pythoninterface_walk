@@ -33,13 +33,29 @@ class MpcWeightAdjustmentModule : public SolverSynchronizedModule {
    */
   void setResidualWeights(const std::vector<double>& residualActions);
 
+  /**
+   * @brief 获取当前一次 MPC 求解前使用的 Q 矩阵对角线（Q_new 对角元素）
+   *
+   * 注意：仅对已经调用过一次 updateWeightsInternal() 之后有效。
+   */
+  std::vector<double> getCurrentQDiag();
+
+  /**
+   * @brief 获取上一轮 MPC 求解前使用的 Q 矩阵对角线
+   *
+   * 若尚未有「上一轮」，则通常与当前对角线相同。
+   */
+  std::vector<double> getPrevQDiag();
+
  private:
   void updateWeightsInternal();
   WBMpcInterface& interface_;
 
   std::vector<double> currentResidual_;
   matrix_t Q_base_;                          // 首次调用时从 OCP 快照保存的基准 Q 矩阵
-  std::mutex residualMutex_;                 // 保证多线程安全
+  vector_t currentQDiag_;                    // 当前 Q 矩阵的对角线 (Q_new 对角元素)
+  vector_t prevQDiag_;                       // 上一轮 Q 矩阵的对角线
+  std::mutex residualMutex_;                 // 保证多线程安全（同时保护残差与 Q 对角线）
   std::atomic<bool> hasNewResidual_{false};  // 标记是否有待更新的数据
 };
 

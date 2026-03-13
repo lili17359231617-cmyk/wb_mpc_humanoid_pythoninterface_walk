@@ -328,10 +328,18 @@ def main():
             float(os.environ.get("FORCE_MAG_MAX", "80.0")),
         )
         phase_vel_rand = (0.0, 0.0, 0.0)   # 纯站立，无速度随机化
+        # 站立阶段：更强调姿态/高度稳定性，速度追踪主要是保持 vx≈0
         phase_reward_fn = MpcWeightEnvReward(
-            w_height=1.5, w_orientation=0.8, w_velocity=0.0,
-            w_survival=0.1, w_action_magnitude=0.005, w_action_smooth=0.01,
-            w_gait_symmetry=0.0,
+            target_height=0.75,
+            target_vx=0.0,
+            target_vy=0.0,
+            target_vyaw=0.0,
+            fall_height_threshold=0.6,
+            max_roll_pitch=0.5,
+            # 稳定性优先，其次平滑，速度追踪权重略小
+            w_tracking=0.5,
+            w_stable=1.5,
+            w_smooth=1.0,
         )
         print(f"[Phase 1] 站立鲁棒性：active_dims={phase_active_dims}, force_prob={phase_force_prob}, force_mag={phase_force_mag}")
     else:
@@ -344,10 +352,17 @@ def main():
             float(os.environ.get("FORCE_MAG_MAX", "62.0")),
         )
         phase_vel_rand = (0.30, 0.15, 0.15)   # 速度指令大范围随机化
+        # 行走阶段：更强调速度/方向追踪，仍保留姿态稳定和平滑约束
         phase_reward_fn = MpcWeightEnvReward(
-            w_height=1.0, w_orientation=0.5, w_velocity=1.0,
-            w_survival=0.1, w_action_magnitude=0.005, w_action_smooth=0.01,
-            w_gait_symmetry=0.2,
+            target_height=0.75,
+            target_vx=0.15,
+            target_vy=0.0,
+            target_vyaw=0.0,
+            fall_height_threshold=0.6,
+            max_roll_pitch=0.5,
+            w_tracking=1.5,
+            w_stable=1.0,
+            w_smooth=1.0,
         )
         print(f"[Phase 2] 行走稳定性：active_dims={phase_active_dims}, vel_rand={phase_vel_rand}, gait_sym=0.2")
 

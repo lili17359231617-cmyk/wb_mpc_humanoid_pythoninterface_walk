@@ -357,6 +357,14 @@ class G1MpcWeightEnv(gym.Env):
         root_ang_vel_local = np.array(next_robot_state.get_root_angular_velocity(), dtype=np.float64)
         terminated = height < self._reward_fn.fall_height_threshold
         truncated = False
+        # 从权重调整模块读取当前/上一轮 Q 对角线，用于奖励中的权重平滑项
+        try:
+            q_diag_now = np.array(self._weight_module.get_current_Q_diag(), dtype=np.float32)
+            q_diag_prev = np.array(self._weight_module.get_prev_Q_diag(), dtype=np.float32)
+        except Exception:
+            q_diag_now = None
+            q_diag_prev = None
+
         info = {
             "sim_time": self._sim_time,
             "step": self._step_count,
@@ -367,6 +375,8 @@ class G1MpcWeightEnv(gym.Env):
             "root_lin_vel_local": root_lin_vel_local.astype(np.float32),
             "root_ang_vel_local": root_ang_vel_local.astype(np.float32),
             "fallen": terminated,
+            "Q_diag_now": q_diag_now,
+            "Q_diag_prev": q_diag_prev,
         }
         if self._step_count == 1 and self._reset_rand_info:
             info.update(self._reset_rand_info)

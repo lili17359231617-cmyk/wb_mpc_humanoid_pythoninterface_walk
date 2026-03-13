@@ -44,14 +44,26 @@ void MpcWeightAdjustmentModule::updateWeightsInternal() {
     //    避免 exp(a) 在多步间累乘导致权重无限增长/衰减。
     if (Q_base_.rows() == 0) {
       Q_base_ = costTerm.Q_;
+      // 初始化 Q 对角线快照
+      currentQDiag_ = Q_base_.diagonal();
+      prevQDiag_ = currentQDiag_;
     }
 
     if (static_cast<Eigen::Index>(currentResidual_.size()) == Q_base_.rows()) {
       constexpr scalar_t kZeroWeightEps = 1e-9;
-      constexpr scalar_t kZeroWeightAlpha = 1.0;  // Softplus 映射的缩放系数 α
-      constexpr scalar_t kZeroWeightBias = 0.0;   // Softplus 映射的偏置 b
+      constexpr scalar_t kZeroWeightAlpha = 0.1;  // Softplus 映射的缩放系数 α
+      constexpr scalar_t kZeroWeightBias = -2;    // Softplus 映射的偏置 b
 
       matrix_t Q = Q_base_;
+
+      // 在写入新的 Q 之前，将当前对角线备份为上一轮
+      if (currentQDiag_.size() == Q_base_.rows()) {
+        prevQDiag_ = currentQDiag_;
+      } else {
+        prevQDiag_ = Q_base_.diagonal();
+      }
+      currentQDiag_.resize(Q_base_.rows());
+
       for (int i = 0; i < Q.rows(); ++i) {
         const scalar_t qBase = Q_base_(i, i);
         const scalar_t a = static_cast<scalar_t>(currentResidual_[i]);
@@ -65,6 +77,8 @@ void MpcWeightAdjustmentModule::updateWeightsInternal() {
           // Q_new = Q_base * exp(a)
           Q(i, i) = qBase * std::exp(a);
         }
+
+        currentQDiag_(i) = Q(i, i);
       }
       // 3. 写回修改后的矩阵
       costTerm.Q_ = Q;
@@ -72,6 +86,26 @@ void MpcWeightAdjustmentModule::updateWeightsInternal() {
   } catch (const std::exception& e) {
     std::cerr << "[MpcWeightAdjustmentModule] Error: " << e.what() << std::endl;
   }
+}
+
+std::vector<double> MpcWeightAdjustmentModule::getCurrentQDiag() {
+  std::lock_guard<std::mutex> lock(residualMutex_);
+  std::vector<double> out;
+  out.reserve(static_cast<size_t>(currentQDiag_.size()));
+  for (int i = 0; i < currentQDiag_.size(); ++i) {
+    out.push_back(static_cast<double>(currentQDiag_(i)));
+  }
+  return out;
+}
+
+std::vector<double> MpcWeightAdjustmentModule::getPrevQDiag() {
+  std::lock_guard<std::mutex> lock(residualMutex_);
+  std::vector<double> out;
+  out.reserve(static_cast<size_t>(prevQDiag_.size()));
+  for (int i = 0; i < prevQDiag_.size(); ++i) {
+    out.push_back(static_cast<double>(prevQDiag_(i)));
+  }
+  return out;
 }
 
 }  // namespace ocs2::humanoid
